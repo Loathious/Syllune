@@ -48,8 +48,22 @@ from .smart_edit import SmartEditor
 from .media_pause import MediaPause
 from .game_mode import GameModeWatcher
 
-# Beam width per quality. Fast also skips the AI edit.
-QUALITY_BEAMS = {'fast': 1, 'balanced': 3, 'best': 5}
+# What each quality does, in one place:
+#   beam       - Whisper's beam width (wider = more accurate, a little slower).
+#   quick_path - short messages decode in one encoder pass, about half the wait.
+#                Best skips it, so Swedish still routes to KB-Whisper.
+#   ai_short / ai_long - whether the local AI edit (punctuation, sentence
+#                breaks, filler words) runs on short messages / longer ones.
+QUALITY_PROFILES = {
+    'fast':     {'beam': 1, 'quick_path': True,  'ai_short': False, 'ai_long': False},
+    'balanced': {'beam': 3, 'quick_path': True,  'ai_short': False, 'ai_long': True},
+    'best':     {'beam': 5, 'quick_path': False, 'ai_short': True,  'ai_long': True},
+}
+# The "Short messages" choices in Settings, in seconds of recording (0 = off,
+# every dictation is treated as a long one).
+SHORT_MESSAGE_SECONDS = (0, 3, 5, 8)
+# How often a recording start may ping Ollama to keep the AI model loaded.
+AI_WARM_INTERVAL_SECONDS = 120
 from .hub_api import HubApi
 from .meetings import MeetingController, MeetingStore
 from .stats import record_transcription
@@ -224,7 +238,15 @@ class StateManager:
         quality = str(self.config_manager.get_whisper_config().get('quality') or 'balanced').lower()
         return quality if quality in ('fast', 'balanced', 'best') else 'balanced'
 
-    # whisper.quality → beam size and the AI edit, nothing else. It used to
+    # Recordings up to this many seconds are "short messages": the fast path
+    # with no AI edit in Fast and Balanced. 0 turns the distinction off.
+    def short_message_seconds(self) -> float:
+        try:
+            return max(0.0, float(self.config_manager.get_whisper_config().get('short_message_seconds', 5)))
+        except (TypeError, ValueError):
+            return 5.0
+
+    # whisper.quality → QUALITY_PROFILES, nothing else. It used to
     # swap Best onto large-v3, a silent 3 GB download that refused every
     # dictation until it finished, so changing quality "broke" dictation.
     # Switching is now instant and never touches the speech model.
@@ -241,7 +263,7 @@ class StateManager:
     # Commit the settings as one completed change; optional AI is best effort.
     def _commit_quality(self, quality):
         self.config_manager.update_user_setting('whisper', 'quality', quality)
-        self.whisper_engine.beam_size = QUALITY_BEAMS[quality]
+        self.whisper_engine.beam_size = QUALITY_PROFILES[quality]['beam']
         if getattr(self.whisper_engine, 'model', None) is not None:
             try:
                 self.sync_ai_model()
@@ -310,14 +332,14 @@ class StateManager:
                 unique.append(term)
         return unique
 
-    # The AI edit on top of the deterministic cleanup. Skipped in fast mode, for
-    # a whole-snippet dictation, verbatim apps and rules with `ai: false`. The
+    # The AI edit on top of the deterministic cleanup. The pipeline decides
+    # from the quality whether it runs at all; this still skips a
+    # whole-snippet dictation, verbatim apps and rules with `ai: false`. The
     # style's own finishing touches run again afterwards, since the model
     # writes conventional prose.
     def _smart_edit(self, text: str, rule, raw_cfg: dict, cfg: dict, info: dict) -> str:
         rule = rule or {}
-        if (self.current_quality() == 'fast' or info.get('whole_snippet') or rule.get('ai') is False
-                or not text.strip()):
+        if info.get('whole_snippet') or rule.get('ai') is False or not text.strip():
             return text
         style = rule.get('style') or raw_cfg.get('style') or ''
         try:
@@ -805,6 +827,7 @@ class StateManager:
             # Only spin up the streaming-delivery worker once recording is
             # confirmed — otherwise a failed start would leak the worker thread.
             self._setup_streaming_delivery()
+            self._warm_ai_model()
             print("\n🎤 Recording started! Speak now...")
             self.config_manager.print_stop_instructions_based_on_config()
             self.audio_feedback.play_start_sound()
@@ -812,6 +835,21 @@ class StateManager:
             if self.level_overlay:
                 self.level_overlay.show_recording()
             self._schedule_silent_mic_check()
+
+    # Ollama drops a model it hasn't used for a while (or after a restart), and
+    # the first edit then times out into plain, unpunctuated text. A cheap
+    # load request at recording start overlaps any reload with your speech.
+    def _warm_ai_model(self):
+        now = time.monotonic()
+        if now - getattr(self, '_last_ai_warm', float('-inf')) < AI_WARM_INTERVAL_SECONDS:
+            return
+        if self.current_quality() == 'fast' or not self.smart_editor.enabled():
+            return
+        self._last_ai_warm = now
+        try:
+            self.smart_editor.preload()
+        except Exception:
+            self.logger.debug('AI warm-up failed', exc_info=True)
 
     # Decide whether this (plain dictation) recording should stream finalized
     # phrases to the cursor live, and if so spin up the delivery worker. Only the
@@ -1107,9 +1145,12 @@ class StateManager:
             if self.level_overlay:
                 self.level_overlay.show_processing()
 
-            whisper_cfg = self.config_manager.get_whisper_config()
-            quick = (not command_mode and not rephrase_mode and whisper_cfg.get('quick_short_clips', True)
-                     and duration <= float(whisper_cfg.get('quick_clip_seconds', 4.0)))
+            # One quality snapshot per recording, so a change in Settings
+            # mid-dictation applies cleanly from the next one.
+            profile = QUALITY_PROFILES[self.current_quality()]
+            short_message = duration <= self.short_message_seconds()
+            quick = (not command_mode and not rephrase_mode and short_message and profile['quick_path'])
+            use_ai_edit = profile['ai_short'] if short_message else profile['ai_long']
             transcribed_text = self.whisper_engine.transcribe_audio(audio_data, quick=quick)
             self._offer_outsider_language()
 
@@ -1159,7 +1200,7 @@ class StateManager:
             postprocess_cfg = effective_postprocess_config(raw_postprocess_cfg, rule)
             postprocess_info = {}
             transcribed_text = postprocess(transcribed_text, postprocess_cfg, postprocess_info)
-            if not quick:
+            if use_ai_edit:
                 transcribed_text = self._smart_edit(transcribed_text, rule, raw_postprocess_cfg,
                                                     postprocess_cfg, postprocess_info)
 

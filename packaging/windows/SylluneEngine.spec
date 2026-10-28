@@ -3,10 +3,70 @@
 # Model weights and all per-user data are deliberately absent from the bundle.
 
 from pathlib import Path
+from importlib import metadata
 from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 from PyInstaller.building import build_main
 from PyInstaller.utils.win32 import versioninfo
 import tomllib
+import os
+
+
+# Collect only native inference runtimes, preserving their wheel layout and
+# upstream license texts. No Python NVIDIA imports or host CUDA paths leak in.
+def collect_nvidia_runtime(mode, requirements_path):
+    if mode not in ('required', 'auto', 'none'):
+        raise ValueError('SYLLUNE_GPU_RUNTIME must be required, auto, or none')
+    if mode == 'none':
+        return [], []
+    distributions = {
+        'nvidia-cublas-cu12': 'cublas',
+        'nvidia-cudnn-cu12': 'cudnn',
+        'nvidia-cuda-runtime-cu12': 'cuda_runtime',
+        'nvidia-cuda-nvrtc-cu12': 'cuda_nvrtc',
+    }
+    try:
+        # A pin may carry an environment marker ("==1.0; sys_platform == 'win32'"),
+        # which is not part of the version.
+        pins = dict(line.split(';', 1)[0].strip().split('==', 1) for line in
+                    Path(requirements_path).read_text(encoding='utf-8').splitlines()
+                    if '==' in line and not line.lstrip().startswith('#'))
+        binaries, notices = [], []
+        for name, package in distributions.items():
+            distribution = metadata.distribution(name)
+            if distribution.version != pins.get(name):
+                raise RuntimeError(f'{name} version {distribution.version} differs from pinned version {pins.get(name)}')
+            dll_count = notice_count = 0
+            for file in distribution.files or []:
+                relative = Path(file)
+                source = Path(distribution.locate_file(file))
+                # NVBLAS is a separate BLAS interception tool; CTranslate2 uses
+                # cuBLAS directly. Keep all cuDNN/NVRTC components for lazy loads.
+                if (relative.parent.as_posix() == f'nvidia/{package}/bin'
+                        and relative.suffix.lower() == '.dll'
+                        and not relative.name.lower().startswith('nvblas')):
+                    if not source.is_file():
+                        raise RuntimeError(f'{name} runtime DLL missing: {relative}')
+                    binaries.append((str(source), f'nvidia/{package}/bin'))
+                    dll_count += 1
+                elif ('licenses' in relative.parts or
+                      relative.name.lower().startswith(('license', 'notice', 'copying'))):
+                    if not source.is_file():
+                        raise RuntimeError(f'{name} license file missing: {relative}')
+                    notice_parts = relative.parts
+                    suffix = (Path(*notice_parts[notice_parts.index('licenses') + 1:])
+                              if 'licenses' in notice_parts else Path(relative.name))
+                    destination = Path('licenses/nvidia') / name / suffix.parent
+                    notices.append((str(source), destination.as_posix()))
+                    notice_count += 1
+            if not dll_count or not notice_count:
+                raise RuntimeError(f'{name} has incomplete runtime DLLs or license files')
+        return binaries, notices
+    except (metadata.PackageNotFoundError, OSError, RuntimeError) as error:
+        message = f'NVIDIA runtime unavailable: {error}. Install packaging/windows/requirements-runtime.txt or build with -GpuRuntime None.'
+        if mode == 'required':
+            raise RuntimeError(message) from error
+        print(f'WARNING: {message} Building CPU-only engine.')
+        return [], []
 
 # PyInstaller imports every collected package in one child process to find DLL
 # dependencies. Importing onnxruntime after winrt crashes that process (native
@@ -44,6 +104,11 @@ datas = collect_data_files('syllune')
 for package in ('faster_whisper', 'ten_vad', 'sherpa_onnx', 'sounddevice', 'certifi'):
     datas += collect_data_files(package)
 binaries = []
+gpu_binaries, gpu_notices = collect_nvidia_runtime(
+    os.environ.get('SYLLUNE_GPU_RUNTIME', 'auto').lower(),
+    root / 'packaging/windows/requirements-runtime.txt')
+binaries += gpu_binaries
+datas += gpu_notices
 for package in ('ctranslate2', 'onnxruntime', 'sherpa_onnx', '_sounddevice_data'):
     binaries += collect_dynamic_libs(package)
 hiddenimports = collect_submodules('syllune') + [

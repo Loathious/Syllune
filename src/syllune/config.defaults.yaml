@@ -52,20 +52,21 @@ whisper: # Whisper AI Model Settings
     # flagged with an offer to add it. [] = any language.
     languages: []
 
-    # Speed versus accuracy, in one choice (the hub's Settings page sets it):
-    #   fast     - greedy decoding, no AI edit. Text appears in well under a second.
-    #   balanced - beam search plus the local AI edit (ai: below) for punctuation,
-    #              tone and prompt structure. About 1-1.5 s.               (default)
-    #   best     - balanced, but English and mixed speech use large-v3 instead of
-    #              large-v3-turbo (3 GB download, ~0.7 GB more VRAM, a bit slower).
-    # Swedish always uses `language_models` (KB-Whisper), whatever the mode.
+    # Speed versus accuracy, in one choice (the hub's Settings page sets it).
+    # Every mode punctuates: Whisper is primed with a punctuated sentence in
+    # the language you speak. See QUALITY_PROFILES in state_manager.py.
+    #   fast     - greedy decoding, never the AI edit. Quickest.
+    #   balanced - beam 3. Short messages are typed straight away; longer
+    #              dictations get the local AI edit (ai: below) for sentence
+    #              breaks, commas and filler words, about +1 s.        (default)
+    #   best     - beam 5, the full decode for every clip (so Swedish routes to
+    #              `language_models`), and the AI edit on short messages too.
     quality: balanced
-    # Short clips (a few words) take a quick path: one GPU pass for language
-    # and text, greedy decoding, no KB-Whisper routing and no AI rewrite.
-    # Roughly half the wait, slightly less accurate. The length includes the
-    # ~0.5 s pre-roll and any pauses kept in the recording.
-    quick_short_clips: true
-    quick_clip_seconds: 4.0
+    # Recordings up to this many seconds count as short messages (Settings >
+    # Short messages: 0 = off, 3, 5 or 8). They take a quick path, one GPU
+    # pass for language and text, and in Fast and Balanced skip the AI edit.
+    # The length includes the ~0.5 s pre-roll and pauses kept in the recording.
+    short_message_seconds: 5
 
     # Transcription quality settings
     beam_size: 5 # Higher = more accurate but slower (1-10)
@@ -680,8 +681,10 @@ ai: # Local AI edit after Whisper (smart_edit.py), run by Ollama on this PC
     # Any chat model installed in Ollama. gemma3:4b handles Swedish and
     # English well and needs ~2.7 GB of VRAM.
     model: gemma3:4b
-    # How long Ollama keeps the model in VRAM after the last dictation.
-    keep_alive: 20m
+    # How long Ollama keeps the model in VRAM after the last dictation. -1 =
+    # always (game mode still unloads it while a game has focus). A model that
+    # was dropped makes the next edit time out into plain text.
+    keep_alive: -1
     # Context window. Changing it makes Ollama reload the model.
     num_ctx: 4096
     # Shorter dictations ("ok thanks") skip the edit; prompts never do.

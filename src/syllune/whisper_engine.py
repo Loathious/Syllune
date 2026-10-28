@@ -63,6 +63,25 @@ def join_hotwords(words) -> str:
     merged += [word for word in BUILT_IN_HOTWORDS if word.lower() not in {w.lower() for w in merged}]
     return ", ".join(merged)
 
+
+# Whisper copies the style of the text it is told came before the clip. With
+# no prompt, or only the bare hotword list, it often returns run-on text with
+# hardly a comma; a short, fully punctuated sentence in the spoken language
+# brings back full sentences, commas and question marks. Kept short and
+# generic so its words never leak into a transcript.
+PUNCTUATION_PRIMERS = {
+    'en': "Okay, sounds good. I'll send it later, if that works for you?",
+    'sv': "Okej, det låter bra. Jag skickar det senare, om det passar dig?",
+}
+
+
+# The previous-text prompt for one clip: the punctuation primer for its
+# language, then the user's own prompt (app rule, selection seed), which stays
+# nearest the clip so it keeps the strongest say.
+def build_prompt(language, user_prompt) -> str | None:
+    parts = [PUNCTUATION_PRIMERS.get(language or ''), (user_prompt or '').strip()]
+    return ' '.join(part for part in parts if part) or None
+
 class WhisperEngine:
     def __init__(self,
                  model_key: str = "tiny",
@@ -298,6 +317,18 @@ class WhisperEngine:
     def _model_for(self, language: Optional[str]):
         return self.language_model_instances.get(language) or self.model
 
+    # The main model's best guess, or None for an English-only model or a
+    # failed detection (faster-whisper then detects inside transcribe()).
+    def _top_language(self, audio_data: np.ndarray) -> Optional[str]:
+        if not getattr(self.model.model, 'is_multilingual', False):
+            return 'en'
+        try:
+            top, _prob, _all = self.model.detect_language(audio_data)
+            return top
+        except Exception as e:
+            self.logger.debug(f"Language detection failed: {e}")
+            return None
+
     def _detect_language(self, audio_data: np.ndarray) -> Optional[str]:
         if self.language is not None:
             return self.language
@@ -316,7 +347,7 @@ class WhisperEngine:
     # full decode on an accidental hotkey press. Callers rely on this contract —
     # whisper_engine_cpp and system_audio both feed it the same array shape.
     # `quick` is the short-clip path: one encoder pass for both language and
-    # text, greedy decoding, main model only (see _transcribe_quick).
+    # text, main model only (see _transcribe_quick).
     @_serialize_model_use
     def transcribe_audio(self,
                          audio_data: np.ndarray, beam_size: int = None,
@@ -361,7 +392,9 @@ class WhisperEngine:
                 transcribed_text, language, confidence = quick_result
                 detected_language = language
             else:
-                language = self._detect_language(audio_data)
+                # The punctuation primer needs the language up front, so
+                # detect it here even when nothing is routed by language.
+                language = self._detect_language(audio_data) or self._top_language(audio_data)
                 model = self._model_for(language)
 
                 transcribe_kwargs = dict(
@@ -370,8 +403,9 @@ class WhisperEngine:
                     task=self.task,
                     condition_on_previous_text=False,
                 )
-                if self.initial_prompt:
-                    transcribe_kwargs["initial_prompt"] = self.initial_prompt
+                prompt = build_prompt(language, self.initial_prompt)
+                if prompt:
+                    transcribe_kwargs["initial_prompt"] = prompt
                 if self.hotwords:
                     transcribe_kwargs["hotwords"] = self.hotwords
 
@@ -449,10 +483,13 @@ class WhisperEngine:
             language = 'en'
 
         tokenizer = Tokenizer(model.hf_tokenizer, multilingual, task='transcribe', language=language)
-        previous = tokenizer.encode(" " + self.initial_prompt.strip()) if self.initial_prompt else []
+        previous_text = build_prompt(language, self.initial_prompt)
+        previous = tokenizer.encode(" " + previous_text) if previous_text else []
         prompt = model.get_prompt(tokenizer, previous, without_timestamps=True, hotwords=self.hotwords)
+        # The quality's beam size applies here too, so Fast, Balanced and Best
+        # differ on short clips; a few words decode in milliseconds either way.
         result = model.model.generate(
-            encoder_output, [prompt], beam_size=1,
+            encoder_output, [prompt], beam_size=max(1, int(self.beam_size or 1)),
             max_length=model.max_length,
             suppress_blank=True,
             suppress_tokens=list(get_suppressed_tokens(tokenizer, [-1])),
@@ -474,13 +511,14 @@ class WhisperEngine:
         try:
             audio_data = audio_data.flatten().astype(np.float32)
             start_time = time.time()
-            language = self._detect_language(audio_data)
+            language = self._detect_language(audio_data) or self._top_language(audio_data)
             self.last_language = language
             model = self._model_for(language)
 
             kwargs = dict(beam_size=self.beam_size, language=language, task=self.task)
-            if self.initial_prompt:
-                kwargs["initial_prompt"] = self.initial_prompt
+            prompt = build_prompt(language, self.initial_prompt)
+            if prompt:
+                kwargs["initial_prompt"] = prompt
             if self.hotwords:
                 kwargs["hotwords"] = self.hotwords
 

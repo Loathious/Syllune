@@ -40,7 +40,7 @@ class CapturePipelineTests(unittest.TestCase):
         s.clipboard_manager.auto_paste = True
         s.config_manager = Mock()
         s.config_manager.config = {'history': {'retention_days': None, 'keep_audio': False}, 'audit': {}}
-        s.config_manager.get_whisper_config.return_value = {'quick_short_clips': True}
+        s.config_manager.get_whisper_config.return_value = {}
         s.config_manager.get_postprocess_config.return_value = {}
         s.app_rules = Mock()
         s.app_rules.match_for_foreground.return_value = {}
@@ -74,3 +74,32 @@ class CapturePipelineTests(unittest.TestCase):
         self.state._transcription_pipeline(np.zeros(19200, dtype=np.float32))
         self.assertEqual('suppressed', load_transcripts()[0]['delivery'])
         self.state.clipboard_manager.copy_text.assert_not_called()
+
+
+# Each quality must visibly change what happens: short messages stay instant
+# in Fast and Balanced, longer ones get the AI edit in Balanced and Best, and
+# Best decodes everything fully. The Short messages setting moves the line.
+class QualityPolicyTests(CapturePipelineTests):
+    def run_dictation(self, quality, seconds, short_message_seconds=5):
+        self.state.config_manager.get_whisper_config.return_value = {
+            'quality': quality, 'short_message_seconds': short_message_seconds}
+        self.state.audio_recorder.get_audio_duration.return_value = seconds
+        self.state._smart_edit.reset_mock()
+        self.state._smart_edit.side_effect = lambda text, *args: text
+        self.state._transcription_pipeline(np.zeros(16000, dtype=np.float32))
+        quick = self.state.whisper_engine.transcribe_audio.call_args.kwargs['quick']
+        return quick, self.state._smart_edit.called
+
+    def test_each_quality_routes_short_and_long_dictations(self):
+        expected = {
+            ('fast', 2): (True, False), ('fast', 20): (False, False),
+            ('balanced', 2): (True, False), ('balanced', 20): (False, True),
+            ('best', 2): (False, True), ('best', 20): (False, True),
+        }
+        for (quality, seconds), outcome in expected.items():
+            with self.subTest(quality=quality, seconds=seconds):
+                self.assertEqual(outcome, self.run_dictation(quality, seconds))
+
+    def test_short_messages_setting_moves_the_cutoff(self):
+        self.assertEqual((True, False), self.run_dictation('balanced', 7, short_message_seconds=8))
+        self.assertEqual((False, True), self.run_dictation('balanced', 2, short_message_seconds=0))

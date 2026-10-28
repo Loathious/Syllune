@@ -318,7 +318,7 @@ class SmartEditor:
         options = {'temperature': 0, 'top_p': 0.9, 'num_predict': num_predict,
                    'num_ctx': int(num_ctx or cfg.get('num_ctx', 4096))}
         payload = {'model': model, 'messages': messages, 'stream': False,
-                   'keep_alive': cfg.get('keep_alive', '20m'), 'options': options}
+                   'keep_alive': cfg.get('keep_alive', -1), 'options': options}
         if json_format:
             payload['format'] = 'json'
         # Thinking models (qwen3, deepseek-r1) would spend seconds reasoning
@@ -340,7 +340,7 @@ class SmartEditor:
 
         def _load():
             payload = {'model': self._model(), 'messages': [], 'stream': False,
-                       'keep_alive': cfg.get('keep_alive', '20m'),
+                       'keep_alive': cfg.get('keep_alive', -1),
                        'options': {'num_ctx': int(cfg.get('num_ctx', 4096))}}
             started = time.perf_counter()
             if self._post('/api/chat', payload, timeout=60):

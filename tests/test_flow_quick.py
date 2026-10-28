@@ -61,3 +61,60 @@ class QuickDecodeTests(unittest.TestCase):
         self.assertEqual(1, engine.model.encode.call_count)
         self.assertEqual('sv', engine.last_language)
         engine.model.transcribe.assert_not_called()
+
+
+# Whisper punctuates only when its prompt shows punctuated text, so every
+# decode is primed with a sentence in the clip's language.
+class PunctuationPrimerTests(unittest.TestCase):
+    def test_prompt_puts_primer_before_user_prompt(self):
+        from syllune.whisper_engine import build_prompt, PUNCTUATION_PRIMERS
+        self.assertEqual(PUNCTUATION_PRIMERS['en'] + ' Project Atlas.', build_prompt('en', 'Project Atlas.'))
+        self.assertEqual(PUNCTUATION_PRIMERS['sv'], build_prompt('sv', ''))
+        self.assertEqual('Notes.', build_prompt('de', 'Notes.'))
+        self.assertIsNone(build_prompt(None, None))
+
+    def test_normal_path_detects_language_to_prime_the_prompt(self):
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
+        from syllune.whisper_engine import PUNCTUATION_PRIMERS
+        engine = object.__new__(WhisperEngine)
+        engine.model = Mock()
+        engine.model.model.is_multilingual = True
+        engine.model.detect_language.return_value = ('sv', 0.9, [])
+        engine.logger = Mock()
+        engine.vad_manager = None
+        engine.beam_size, engine.task, engine.language = 3, 'transcribe', None
+        engine.allowed_languages, engine.language_model_instances = [], {}
+        engine.initial_prompt = engine.hotwords = None
+        engine.log_transcriptions = False
+        engine.model.transcribe.return_value = (
+            [SimpleNamespace(text=' Hej.')], SimpleNamespace(language='sv', language_probability=1.0))
+        engine.transcribe_audio(np.ones(64000, dtype=np.float32))
+        kwargs = engine.model.transcribe.call_args.kwargs
+        self.assertEqual('sv', kwargs['language'])
+        self.assertEqual(PUNCTUATION_PRIMERS['sv'], kwargs['initial_prompt'])
+
+    def test_quick_path_uses_quality_beam_and_primer(self):
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        quiet.__enter__()
+        self.addCleanup(quiet.__exit__, None, None, None)
+        from syllune.whisper_engine import PUNCTUATION_PRIMERS
+        engine = object.__new__(WhisperEngine)
+        engine.logger = Mock()
+        engine.beam_size, engine.task, engine.language = 5, 'transcribe', 'en'
+        engine.initial_prompt = engine.hotwords = None
+        engine.model = Mock()
+        engine.model.feature_extractor.nb_max_frames = 3000
+        engine.model.feature_extractor.return_value = np.zeros((128, 200), dtype=np.float32)
+        engine.model.model.is_multilingual = True
+        engine.model.max_length = 448
+        engine.model.get_prompt.return_value = [1]
+        engine.model.model.generate.return_value = [SimpleNamespace(sequences_ids=[[10]])]
+        fake_tokenizer = Mock(eot=50257)
+        fake_tokenizer.decode.return_value = 'Okay.'
+        with unittest.mock.patch('faster_whisper.tokenizer.Tokenizer', return_value=fake_tokenizer), \
+             unittest.mock.patch('faster_whisper.transcribe.get_suppressed_tokens', return_value=(-1,)):
+            engine._transcribe_quick(np.ones(16000, dtype=np.float32))
+        self.assertEqual(5, engine.model.model.generate.call_args.kwargs['beam_size'])
+        fake_tokenizer.encode.assert_called_once_with(' ' + PUNCTUATION_PRIMERS['en'])

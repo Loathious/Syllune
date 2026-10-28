@@ -120,10 +120,17 @@ def setup_portaudio_path():
 # site-packages; tests pass their own.
 def find_nvidia_dll_dirs(roots=None) -> list:
     if roots is None:
+        # A frozen engine must be portable: never borrow a developer venv or
+        # user-installed CUDA wheel. PyInstaller keeps resources in _MEIPASS.
+        if getattr(sys, 'frozen', False):
+            bundle_root = getattr(sys, '_MEIPASS', Path(sys.executable).parent / '_internal')
+            roots = [bundle_root]
+        else:
+            roots = []
         # Runs at import on every launch, so it must never raise: embedded and
         # old-virtualenv interpreters can lack either of these functions.
-        roots = []
-        for getter in ('getsitepackages', 'getusersitepackages'):
+        for getter in (() if getattr(sys, 'frozen', False) else
+                       ('getsitepackages', 'getusersitepackages')):
             try:
                 found_roots = getattr(site, getter)()
             except AttributeError:
@@ -135,6 +142,10 @@ def find_nvidia_dll_dirs(roots=None) -> list:
             if bin_dir.is_dir() and str(bin_dir) not in found:
                 found.append(str(bin_dir))
     return found
+
+# Windows unregisters a DLL directory when its handle is collected. Keep each
+# registration alive for the process, including deferred cuDNN inference loads.
+_nvidia_dll_directory_handles = {}
 
 # Make pip-installed CUDA libraries loadable (issue #15). GPU onboarding installs
 # nvidia-cublas-cu12 / nvidia-cudnn-cu12, whose DLLs land in folders no search
@@ -151,9 +162,12 @@ def setup_nvidia_dll_path():
     if not dll_dirs:
         return
     for dll_dir in dll_dirs:
+        directory_key = os.path.normcase(os.path.abspath(dll_dir))
+        if directory_key in _nvidia_dll_directory_handles:
+            continue
         try:
-            os.add_dll_directory(dll_dir)
-        except OSError:
+            _nvidia_dll_directory_handles[directory_key] = os.add_dll_directory(dll_dir)
+        except (OSError, AttributeError):
             pass  # PATH below still covers the native loader
     current = os.environ.get('PATH', '')
     on_path = set(current.split(os.pathsep))

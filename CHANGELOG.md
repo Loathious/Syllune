@@ -2,6 +2,17 @@
 
 All notable changes to Syllune. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.2] - 2026-10-28
+
+### Fixed
+- Dictation runs on the GPU again in the installed app: the Windows build now includes the NVIDIA CUDA libraries the speech engine needs, instead of silently falling back to the much slower CPU.
+- Punctuation: Whisper is primed with a punctuated sentence in the language you speak (English or Swedish), so short messages come back as full sentences instead of bare words.
+- The AI edit no longer goes cold. Ollama keeps the model loaded (game mode still unloads it during games), and starting a recording warms it, so the first dictation after a break is not typed unpunctuated after an 8-second wait.
+
+### Changed
+- Quality now changes every dictation. Fast: quickest, never rewritten. Balanced: short messages typed at once, longer ones get the AI edit. Best: beam 5, full decoding and the AI edit on every dictation. Short messages also use the chosen beam width.
+- New **Short messages** setting (Off, 3, 5 or 8 s) decides how long a recording may be and still take the instant path.
+
 ## [0.24.1] - 2026-10-28
 
 ### Fixed

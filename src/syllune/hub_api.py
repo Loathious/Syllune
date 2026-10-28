@@ -139,6 +139,7 @@ class HubApi:
         }
         self._setters = {
             'quality': self._set_quality,
+            'short_messages': self._set_short_messages,
             'ai_model': self._set_ai_model,
             'about_me': self._set_about_me,
             'mic': self._set_mic,
@@ -461,6 +462,7 @@ class HubApi:
         autostart_supported = autostart.is_supported()
         return {
             'quality': self.state.current_quality(),
+            'short_messages': self.state.short_message_seconds(),
             'keep_audio': bool((self.config.config.get('history') or {}).get('keep_audio', True)),
             'mics': [{'id': device['id'], 'name': device['name']} for device in devices],
             'mic': self.state.get_current_audio_device_id(),
@@ -513,6 +515,14 @@ class HubApi:
         if self.state.request_audio_device_change(value, devices[value]):
             self.config.update_user_setting('audio', 'input_device', value)
             self.state.system_tray.refresh_menu()
+
+    # Seconds of recording that still count as a short message (0 = off).
+    # Read per recording, so it applies from the next dictation.
+    def _set_short_messages(self, value):
+        from .state_manager import SHORT_MESSAGE_SECONDS
+        if isinstance(value, bool) or value not in SHORT_MESSAGE_SECONDS:
+            raise ValueError(f"short_messages is one of {', '.join(map(str, SHORT_MESSAGE_SECONDS))}")
+        self.config.update_user_setting('whisper', 'short_message_seconds', int(value))
 
     def _set_sounds(self, value):
         self.config.update_user_setting('audio_feedback', 'enabled', _require_bool(value))

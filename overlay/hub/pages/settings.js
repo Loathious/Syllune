@@ -10,12 +10,16 @@ Hub.pages.settings = (() => {
 
   const set = (key, value) => api('setting_set', { key, value });
 
-  // Quality is also the AI edit switch: Fast is Whisper alone.
+  // Mirrors QUALITY_PROFILES in state_manager.py. Every mode punctuates;
+  // the AI edit adds sentence breaks, commas and filler-word cleanup.
   const QUALITY_HINTS = {
-    fast: 'Quickest. Words are typed as spoken, without the AI edit.',
-    balanced: 'A local AI fixes punctuation, drops filler words and follows each app’s style.',
-    best: 'Like Balanced with the largest speech model. Slower, and needs a strong GPU.',
+    fast: 'Quickest. Punctuated, but never rewritten by the AI edit.',
+    balanced: 'Short messages are typed at once. Longer ones get the AI edit for clean sentences, about a second more.',
+    best: 'Most accurate. Fullest decoding and the AI edit on every dictation, short ones too.',
   };
+  const SHORT_MESSAGE_OPTIONS = [
+    { value: 0, label: 'Off' }, { value: 3, label: '3 s' }, { value: 5, label: '5 s' }, { value: 8, label: '8 s' },
+  ];
   const RETENTION = [
     { value: null, label: 'Forever' },
     { value: 365, label: 'A year' },
@@ -28,7 +32,7 @@ Hub.pages.settings = (() => {
   async function mount() {
     const s = await api('settings');
     return Hub.page('Settings', null,
-      section('Dictation', [micRow(s), qualityRow(s), s.ai_models.length > 1 ? modelRow(s) : null, aboutRow(s)]),
+      section('Dictation', [micRow(s), qualityRow(s), shortMessagesRow(s), s.ai_models.length > 1 ? modelRow(s) : null, aboutRow(s)]),
       section('General', [
         row('Sounds', 'A soft sound when recording starts and stops.',
           Hub.toggle({ checked: s.sounds, label: 'Sounds', onChange: (v) => set('sounds', v) })),
@@ -94,6 +98,15 @@ Hub.pages.settings = (() => {
     control.onPaint = paint;
     paint(s.quality);
     return row('Quality', hint, control.node);
+  }
+
+  // How long a recording may be and still take the instant path.
+  function shortMessagesRow(s) {
+    return row('Short messages', 'Recordings up to this long are typed instantly. Off treats every dictation as a long one.',
+      Hub.segmented({
+        options: SHORT_MESSAGE_OPTIONS, value: s.short_messages, label: 'Short messages',
+        onChange: (v) => set('short_messages', v),
+      }).node);
   }
 
   // Only shown when Ollama has more than one model to choose from.
