@@ -1,7 +1,6 @@
-<p align="center"><img src="docs/assets/banner.svg" alt="Syllune" width="100%"></p>
+<p align="center"><img src="docs/assets/banner.png" alt="Syllune" width="100%"></p>
 
 <p align="center">
-  <a href="https://github.com/Loathious/Syllune/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/Loathious/Syllune?label=release&color=243B5A"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2B-243B5A">
   <img alt="Runs locally" src="https://img.shields.io/badge/runs-100%25%20local-243B5A">
 </p>
