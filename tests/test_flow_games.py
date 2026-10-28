@@ -3,21 +3,21 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from whisper_key.game_mode import GameModeWatcher
-from whisper_key.state_manager import StateManager
+from syllune.game_mode import GameModeWatcher
+from syllune.state_manager import StateManager
 
 
 class GameModeTests(unittest.TestCase):
     def test_running_listed_game_is_detected_when_another_app_has_focus(self):
         watcher = GameModeWatcher(Mock(), lambda: ['FortniteClient-Win64-Shipping.exe'])
-        with patch('whisper_key.game_mode.foreground.get_foreground_app', return_value={'exe': 'discord.exe'}), \
-             patch('whisper_key.game_mode.foreground.running_exe_names', return_value={'fortniteclient-win64-shipping.exe'}):
+        with patch('syllune.game_mode.foreground.get_foreground_app', return_value={'exe': 'discord.exe'}), \
+             patch('syllune.game_mode.foreground.running_exe_names', return_value={'fortniteclient-win64-shipping.exe'}):
             watcher._tick()
             self.assertTrue(watcher.active)
 
     def test_initial_game_is_detected_before_start_returns(self):
         watcher = GameModeWatcher(Mock(), lambda: ['fortniteclient-win64-shipping.exe'])
-        with patch('whisper_key.game_mode.foreground.get_foreground_app', return_value={
+        with patch('syllune.game_mode.foreground.get_foreground_app', return_value={
                 'exe': 'fortniteclient-win64-shipping.exe', 'path': ''}):
             watcher.start()
             try:

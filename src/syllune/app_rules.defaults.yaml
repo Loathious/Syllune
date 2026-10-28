@@ -1,0 +1,104 @@
+# Syllune — Per-app rules
+#
+# When a transcription is about to be delivered, the foreground window is
+# inspected. If its exe name OR window title contains any "match" string,
+# the rule applies and overrides the global behaviour for that delivery.
+#
+# Supported overrides:
+#   auto_send:   true | false   - force ENTER after paste (auto-send)
+#   auto_paste:  true | false   - force or suppress paste-to-cursor
+#   suppress:    true           - skip delivery entirely (only log + recent)
+#   initial_prompt: <string>    - prime Whisper with context for this app
+#                                 (concatenated after your global initial_prompt)
+#   language:    "en"|"es"|...  - force a transcription language for this app
+#   task:        "transcribe"   - or "translate" (Whisper outputs English)
+#   capitalize_first:     true | false  - override global postprocess for this app
+#   ensure_punctuation:   true | false  - "
+#   strip_trailing_period:true | false  - "
+#   inline_formatting:    true | false  - "
+#   lowercase:            true | false  - "
+#   list_formatting:      true | false  - "
+#   style:       formal | casual | very_casual | verbatim | prompt (or one of
+#                your own postprocess.styles) - sets the formatting toggles above
+#                in one go, and the tone of the AI edit
+#   instructions: <string>      - extra guidance for the AI edit in this app,
+#                                 e.g. "British spelling" or "keep it short"
+#   ai:          false          - skip the AI edit in this app
+#
+# A style picks how your writing looks in that app: full sentences in email,
+# relaxed in chat, exactly-as-spoken in a code editor. Toggles set on the same
+# rule win over its style. Only what a rule sets overrides your global
+# postprocess config; everything else is inherited.
+#
+# Browser apps (Gmail, Slack in Chrome, ...) can only be matched by window
+# title, e.g. match: ["Gmail"].
+#
+# Rules are matched top-down; first match wins. Your own rules are matched
+# before all of these, so they always win.
+#
+# THIS FILE SHIPS WITH THE APP AND IS NOT THE ONE YOU EDIT. Your rules live in
+# app_rules.yaml in your config folder, and these are layered underneath, so
+# improvements here reach you on every update. In that file you can:
+#   - add rules of your own (no id needed)
+#   - change one of these, by naming its id and only the keys you want different:
+#       - id: chat-apps
+#         auto_send: false
+#   - turn one off entirely:
+#       - id: terminals
+#         disabled: true
+# It hot-reloads on the next transcription.
+
+rules:
+  # Order matters: first match wins, and window-title matching is by
+  # substring. So the specific app rules come first; otherwise a code
+  # editor showing "slack_bot.py" would match the chat rule (and auto-send).
+
+  # Password managers: never deliver dictation into a password field
+  - id: password-managers
+    match: ["1password.exe", "1password-7.exe", "lastpass.exe", "bitwarden.exe", "keepass.exe", "keepassxc.exe"]
+    suppress: true
+
+  # Code editors: identifier/path bias. Keep it verbatim: no forced
+  # capitalization or trailing period (code isn't prose). Before the AI rule,
+  # so a file named claude.md open in the editor stays verbatim.
+  - id: code-editors
+    match: ["code.exe", "cursor.exe", "windsurf.exe", "rider64.exe", "pycharm64.exe", "idea64.exe"]
+    auto_paste: true
+    initial_prompt: "Programming context. Identifiers, snake_case, camelCase, file paths, regex."
+    style: verbatim
+
+  # AI assistants: the AI edit structures what you say as a prompt. Matches
+  # the desktop apps, their browser tabs, and Claude Code / Codex running in
+  # a terminal (they name the terminal tab), so this sits before terminals.
+  - id: ai-prompts
+    match: ["claude.exe", "chatgpt.exe", "ChatGPT", "Claude", "Gemini", "Perplexity", "Copilot", "Codex", "Grok", "Mistral", "DeepSeek"]
+    style: prompt
+
+  # Terminals: copy only — pasting into a terminal can run commands
+  - id: terminals
+    match: ["windowsterminal.exe", "wt.exe", "conhost.exe", "powershell.exe", "cmd.exe", "alacritty.exe", "wezterm-gui.exe"]
+    auto_paste: false
+    style: verbatim
+
+  # Games: never type into a game. Listed before everything else would be
+  # safer, but these exe names can't collide with the rules above.
+  - id: games
+    match: ["FortniteClient-Win64-Shipping.exe", "VALORANT-Win64-Shipping.exe", "javaw.exe"]
+    suppress: true
+
+  # Chat apps: casual tone, no auto-send (review before Enter).
+  # No English initial_prompt: it would bias Swedish dictation toward English.
+  - id: chat-apps
+    match: ["slack.exe", "discord.exe", "telegram.exe", "whatsapp.exe", "messenger.exe", "Slack", "Discord", "Messenger"]
+    style: casual
+    list_formatting: false   # a new line would send the message early
+
+  # Email clients: formal tone, no auto-send
+  - id: email-clients
+    match: ["outlook.exe", "thunderbird.exe", "Mail", "Gmail", "Outlook"]
+    style: formal
+
+  # Documents: formal prose
+  - id: documents
+    match: ["winword.exe", "notion.exe", "obsidian.exe", "Google Docs"]
+    style: formal

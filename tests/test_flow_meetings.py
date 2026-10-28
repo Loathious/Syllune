@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 import numpy as np
 
-from whisper_key.meetings import MeetingStore, MeetingController, WAITING, write_markdown, remove_echo, build_transcript
+from syllune.meetings import MeetingStore, MeetingController, WAITING, write_markdown, remove_echo, build_transcript
 
 
 class MeetingLifecycleTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class MeetingLifecycleTests(unittest.TestCase):
         events = []
         engine.transcribe_timed.side_effect = lambda *a, **kw: events.append('transcribe') or {
             'language': 'en', 'words': [(0, 1, ' Hello')]}
-        with patch('whisper_key.speaker_diarization.available', return_value=False):
+        with patch('syllune.speaker_diarization.available', return_value=False):
             build_transcript(np.zeros(32000, dtype=np.float32), np.ones(32000, dtype=np.float32) * .1,
                              engine, before_stage=lambda: events.append('policy'))
         self.assertEqual(['policy', 'policy', 'transcribe'], events)

@@ -5,10 +5,10 @@ Voice command mode lets you trigger actions by speaking. Press **Alt+Win** (defa
 ## Configuration
 
 Voice commands are configured in `commands.yaml`, located in your config folder:
-- **Windows:** `%APPDATA%\whisperkey\commands.yaml`
-- **macOS:** `~/.whisperkey/commands.yaml`
+- **Windows:** `%APPDATA%\Syllune\commands.yaml`
+- **macOS:** `~/Library/Application Support/Syllune/commands.yaml`
 
-You can open this folder from the system tray menu: **Open Config Folder**.
+You can open this folder from the tray menu: **Help → Open settings folder**.
 
 ## Format
 

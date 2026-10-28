@@ -16,8 +16,9 @@
 <script src="dock-geometry.js"></script>
 <script>
 // pill.html
-// The dictation pill: a small capsule resting at the screen edge that grows
-// into a live voice meter while you talk, folds into a quiet ripple while the
+// The dictation pill: a small handle resting at the screen edge that opens
+// into a row of icons on hover and grows into a live voice meter while you
+// talk (upright on the side docks), becomes a ball while dragged, folds into a quiet ripple while the
 // text is prepared, and settles back. One canvas; every geometric property is
 // a spring, so any state can interrupt any other mid-motion. When nothing
 // moves the frame loop stops, so the resting pill costs nothing.
@@ -42,15 +43,18 @@ class Spring {
     this.x += this.v * dt;
   }
   get resting() { return Math.abs(this.x - this.target) < 0.01 && Math.abs(this.v) < 0.05; }
+  // Jump straight to a value, as if it had always been there.
+  set(value) { this.x = value; this.v = 0; }
 }
 
+// Sizes settle without overshoot: a calm pill grows, it doesn't wobble.
 const S = {
-  w: new Spring(38, 0.36, 0.2),      // pill size: a touch of life when it grows
-  h: new Spring(7, 0.36, 0.2),
+  w: new Spring(38, 0.32),
+  h: new Spring(7, 0.32),
   alpha: new Spring(0, 0.24),
   rise: new Spring(8, 0.4),          // offset toward the screen edge while hidden
-  shake: new Spring(0, 0.32, 0.55),  // sideways nudge on errors
-  press: new Spring(1, 0.16),        // scale while the pill is pressed
+  shake: new Spring(0, 0.3, 0.3),    // one soft sideways nudge on errors
+  press: new Spring(1, 0.16),        // scale while pressed, or while leaving a dock
   body: new Spring(0.72, 0.24),      // body opacity: the resting pill is quieter
   pitch: new Spring(6.5, 0.36),      // bar spacing: tighter while working
   meter: new Spring(0, 0.22),        // layer opacities (timing set per direction below)
@@ -63,7 +67,9 @@ const S = {
   meeting: new Spring(0, 0.22),
   mstop: new Spring(0, 0.18),
   hub: new Spring(0, 0.18),
+  ball: new Spring(0, 0.2),          // 1 while dragged: the pill becomes a small ball
 };
+const ALPHA_S = 0.24, ALPHA_LEAVE_S = 0.12;
 
 // Content layers leave faster than they arrive, so the outgoing content is
 // gone before the incoming content becomes legible: two layers never read at
@@ -89,46 +95,13 @@ function centerOpacity(name) {
   return own * (1 - smoothstep(0.02, 0.15, outgoing));
 }
 
-function applyReducedMotion() {
-  // Fewer, gentler moves: sizes settle without overshoot, nothing shakes or
-  // slides, and the working ripple only changes brightness.
-  const bounce = reducedMotion.matches ? 0 : 0.2;
-  S.w.configure(0.3, bounce);
-  S.h.configure(0.3, bounce);
-  window.bridge.setReducedMotion(reducedMotion.matches);
-}
+// Reduced motion keeps fades and size changes but drops slides and shakes;
+// main.js also stops gliding the window.
+function applyReducedMotion() { window.bridge.setReducedMotion(reducedMotion.matches); }
 reducedMotion.addEventListener('change', applyReducedMotion);
 applyReducedMotion();
 
-// cubic-bezier timing function, solved the way CSS does it.
-function cubicBezier(x1, y1, x2, y2) {
-  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
-  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
-  const curveX = (t) => ((ax * t + bx) * t + cx) * t;
-  const curveY = (t) => ((ay * t + by) * t + cy) * t;
-  const slopeX = (t) => (3 * ax * t + 2 * bx) * t + cx;
-  return (x) => {
-    if (x <= 0) return 0;
-    if (x >= 1) return 1;
-    let t = x;
-    for (let i = 0; i < 8; i++) {
-      const error = curveX(t) - x;
-      if (Math.abs(error) < 1e-5) return curveY(t);
-      const slope = slopeX(t);
-      if (Math.abs(slope) < 1e-6) break;
-      t -= error / slope;
-    }
-    let lo = 0, hi = 1;
-    t = x;
-    while (hi - lo > 1e-5) {
-      if (curveX(t) < x) lo = t; else hi = t;
-      t = (lo + hi) / 2;
-    }
-    return curveY(t);
-  };
-}
-const easeOut = cubicBezier(0.23, 1, 0.32, 1);
-
+const easeOut = DockGeometry.easeOut;
 const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
 const smoothstep = (a, b, v) => { const t = clamp((v - a) / (b - a)); return t * t * (3 - 2 * t); };
 
@@ -141,16 +114,25 @@ const STOP_RED = [248, 113, 113];
 const ERROR_TEXT = [254, 202, 202];  // soft: most "errors" are just "didn't catch that"
 const AMBER = [253, 224, 150];
 const FONT = '500 12px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
-const HINT = 'Click to dictate';
+const QUIET_NOTICE = 'Not hearing anything';
+const QUIET_AFTER_MS = 5000;         // silence while recording before the quiet notice
+const LOGO = new Image();
+LOGO.src = 'assets/syllune.png';
+LOGO.onload = () => wake();
 
-const EDGE_GAP = DockGeometry.EDGE_GAP; // shared with native previews
-const REST = { w: 38, h: 7 };
+const EDGE_GAP = DockGeometry.EDGE_GAP; // shared with the dock previews
+const REST = { w: 38, h: 7 };           // the resting handle, lying along its edge
 const ACTIVE_H = DockGeometry.ACTIVE_THICKNESS;
-const LISTEN_W = DockGeometry.ACTIVE_LENGTH, LOCKED_W = 152, WORKING_W = 80, ROUND_W = 34;
+const LISTEN_W = DockGeometry.ACTIVE_LENGTH, LOCKED_W = 128, WORKING_W = 64, ROUND_W = 34;
+const BALL = 30;                     // size while dragged
+// The hovered resting pill: logo, hands-free dictation, start meeting, menu.
+const ICON_SLOTS = [['pill', 20], ['handsfree', 50], ['meetingStart', 78], ['hub', 106]];
+const ICONS_W = 126;
+const MAX_W = DockGeometry.WINDOW_WIDTH - 2 * EDGE_GAP;
 const BAND_COUNT = 6;
 const BAR_COUNT = BAND_COUNT * 2 - 1; // mirrored, lowest band in the middle
-const BAR_W = 3, DOT = 3;
-const LISTEN_PITCH = 6.5, WORKING_PITCH = 5;
+const BAR_W = 2, DOT = 2;
+const LISTEN_PITCH = 5, WORKING_PITCH = 4;
 const RIPPLE_MS = 1100;
 const CHECK_DRAW_MS = 260;
 const CHECK_DELAY_MS = 70;           // let the ripple clear before the stroke starts
@@ -163,32 +145,21 @@ const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 let mode = 'rest';                   // rest | listen | processing | success | saved | error
 let noteMode = false, locked = false;
 let message = '', noticeText = '', noticeUntil = 0;
-// 'center', or 'left'/'right' when the pill sits on that side of the screen.
-let idlePill = true, gameMode = false, align = 'center';
+let idlePill = true, gameMode = false;
+let dock = null;                     // the edge the pill rests on, one of DockGeometry.POSITIONS
+let dockLeaving = false, dockLeftSent = false;
 let meetingSince = null, meetingTick = null;
 let pendingCount = 0, dragStart = null, dragLast = null, dragging = false;
-let hovering = false, mouse = null, hoverTarget = null, pressedOn = null;
-let workSince = 0, checkSince = 0;
+// pointerInside is main.js's verdict and decides what a click hits; hovering
+// is what the pill shows, and follows it with a short intent delay.
+let pointerInside = false, hovering = false, hoverIntent = null;
+let mouse = null, hoverTarget = null, pressedOn = null;
+let workSince = 0, checkSince = 0, lastHeardAt = 0;
 let restTimer = null;
 
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
-const sideDock = () => align !== 'center';
-const logicalWidth = () => sideDock() ? innerHeight : innerWidth;
-const logicalHeight = () => sideDock() ? innerWidth : innerHeight;
-
-// A logical horizontal canvas is rotated as a whole for the side waveform.
-// Pointer coordinates use its exact inverse; icons counter-rotate upright.
-function logicalPoint(point) {
-  if (align === 'left') return {x:point.y, y:innerWidth - point.x};
-  if (align === 'right') return {x:innerHeight - point.y, y:point.x};
-  return point;
-}
-function physicalRect(rect) {
-  if (align === 'left') return {x:innerWidth-rect.y-rect.h, y:rect.x, w:rect.h, h:rect.w};
-  if (align === 'right') return {x:rect.y, y:innerHeight-rect.x-rect.w, w:rect.h, h:rect.w};
-  return rect;
-}
+const sideDock = () => dock === 'middle-left' || dock === 'middle-right';
 
 const widthCache = new Map();
 function textWidth(t) {
@@ -196,7 +167,6 @@ function textWidth(t) {
   return widthCache.get(t);
 }
 // Pill width for a label plus its padding (and checkmark), capped to the window.
-const MAX_W = 380;
 const labelWidth = (label, extra) => Math.min(MAX_W, textWidth(label) + extra);
 
 function setMode(next) {
@@ -205,6 +175,7 @@ function setMode(next) {
   const now = performance.now();
   if (next !== 'listen') noticeText = '';
   if (next === 'processing') workSince = now;
+  if (next === 'listen') lastHeardAt = now;
   if (next === 'success' || next === 'saved') checkSince = now + CHECK_DELAY_MS;
   wake();
 }
@@ -212,6 +183,29 @@ function setMode(next) {
 function restAfter(ms) {
   clearTimeout(restTimer);
   restTimer = setTimeout(() => setMode('rest'), ms);
+}
+
+// --- Geometry -----------------------------------------------------------------
+// The pill grows away from its edge: up from the bottom, inward from a side.
+// Centres match DockGeometry.dockBounds, so the recording pill lands exactly
+// on the preview it was dropped on. The pill never travels inside its window;
+// main.js moves the window instead.
+
+const restSize = () => sideDock() ? { w: REST.h, h: REST.w } : REST;
+
+function edgeGap(size, room) { return Math.min(EDGE_GAP, Math.max(0, room - size)); }
+
+function pillCenter(w, h) {
+  if (dock === 'middle-left') return { x: edgeGap(w, innerWidth) + w / 2, y: innerHeight / 2 };
+  if (dock === 'middle-right') return { x: innerWidth - edgeGap(w, innerWidth) - w / 2, y: innerHeight / 2 };
+  return { x: innerWidth / 2, y: innerHeight - edgeGap(h, innerHeight) - h / 2 };
+}
+
+// Unit vector pointing at the screen edge: hidden pills sit a little past it.
+function towardEdge() {
+  if (dock === 'middle-left') return { x: -1, y: 0 };
+  if (dock === 'middle-right') return { x: 1, y: 0 };
+  return { x: 0, y: 1 };
 }
 
 // --- Voice meter --------------------------------------------------------------
@@ -237,12 +231,13 @@ function updateVoice(dt) {
     else voice.referenceDb -= Math.min(voice.referenceDb - peak, 3 * dt);
     voice.referenceDb = clamp(voice.referenceDb, -50, -14);
     gate = smoothstep(0.0025, 0.007, voice.rms);
+    if (voice.rms > 0.006) lastHeardAt = performance.now();
   }
   const floor = voice.referenceDb - RANGE_DB;
   for (let i = 0; i < BAND_COUNT; i++) {
     const target = bands ? gate * clamp((bands[i] - floor) / RANGE_DB) ** 1.5 : 0;
     // Meter ballistics: rise in ~35 ms, fall in ~120 ms.
-    const tau = target > voice.shown[i] ? 0.035 : 0.12;
+    const tau = target > voice.shown[i] ? 0.04 : 0.16;
     voice.shown[i] += (target - voice.shown[i]) * (1 - Math.exp(-dt / tau));
   }
 }
@@ -269,7 +264,7 @@ window.bridge.onState((msg) => {
     case 'error':
       message = msg.message || 'Something went wrong';
       setMode('error');
-      if (!reducedMotion.matches) S.shake.v -= 120;
+      if (!reducedMotion.matches) S.shake.v -= 70;
       restAfter(2600);
       break;
     case 'notice':
@@ -289,63 +284,94 @@ window.bridge.onLevel((level) => {
 window.bridge.onConfig((config) => {
   if ('idlePill' in config) idlePill = config.idlePill;
   if ('gameMode' in config) gameMode = config.gameMode;
-  if ('align' in config) {
-    const next = config.align === 'left' || config.align === 'right' ? config.align : 'center';
-    if (next !== align) { align = next; lastHitKey = ''; mouse = null; hovering = false; }
-  }
   if ('meetingSince' in config) meetingSince = config.meetingSince;
   if ('pendingCount' in config) pendingCount = config.pendingCount;
+  if (DockGeometry.POSITIONS.includes(config.dock) && config.dock !== dock) {
+    const first = dock === null;
+    dock = config.dock;
+    lastHitKey = '';
+    // The first dock is where the page starts: take its shape without a morph.
+    if (first) { const t = layout(performance.now()); S.w.set(t.w); S.h.set(t.h); }
+  }
+  if (config.arrive) arrive();
   clearTimeout(meetingTick);
   wake();
 });
 
-// --- Pointer ------------------------------------------------------------------
-// The window only receives the mouse while main.js sees the cursor over the
-// pill (see setHitRect below); clicks never take focus from your app.
+// --- Changing docks -----------------------------------------------------------
+// main.js glides the window toward the dock you dropped the pill on while the
+// pill fades and shrinks into it; once it reports the pill gone, the window
+// jumps to the new edge and the pill appears there in its final shape, just
+// past the edge, and settles in. Nothing visible ever moves inside the window
+// while the window itself moves, so the two can't drift apart on screen.
 
-window.bridge.onHover((inside) => {
-  hovering = inside;
-  if (!inside && !dragging) { mouse = null; hoverTarget = null; pressedOn = null; S.press.target = 1; }
+window.bridge.onDockLeave(() => {
+  dockLeaving = true; dockLeftSent = false;
   wake();
 });
 
-canvas.addEventListener('mousemove', (e) => { mouse = logicalPoint({ x: e.clientX, y: e.clientY }); wake(); });
+function arrive() {
+  dockLeaving = false; dockLeftSent = false;
+  const t = layout(performance.now());
+  S.w.set(t.w); S.h.set(t.h);
+  S.alpha.set(0); S.press.set(1); S.shake.set(0);
+  S.rise.set(reducedMotion.matches ? 0 : 8);
+  wake();
+}
+
+// --- Pointer ------------------------------------------------------------------
+// The window only receives the mouse while main.js sees the cursor over the
+// pill (see reportHitRect below); clicks never take focus from your app.
+
+const HOVER_ENTER_MS = 70;           // a cursor passing by doesn't open the pill
+const HOVER_LEAVE_MS = 280;          // nor does one that slips off for a moment close it
+
+window.bridge.onHover((inside) => {
+  pointerInside = inside;
+  if (!inside && !dragging) { mouse = null; hoverTarget = null; pressedOn = null; }
+  clearTimeout(hoverIntent);
+  if (inside !== hovering) {
+    hoverIntent = setTimeout(() => { hovering = inside; wake(); }, inside ? HOVER_ENTER_MS : HOVER_LEAVE_MS);
+  }
+  wake();
+});
+
+canvas.addEventListener('mousemove', (e) => { mouse = { x: e.clientX, y: e.clientY }; wake(); });
 canvas.addEventListener('mouseleave', () => { mouse = null; wake(); });
 canvas.addEventListener('pointerdown', (event) => {
-  if (event.button !== 0) return;
-  mouse = logicalPoint({x:event.clientX, y:event.clientY});
+  if (event.button !== 0 || dockLeaving) return;
+  mouse = { x: event.clientX, y: event.clientY };
   hoverTarget = findHoverTarget(layout(performance.now()));
   pressedOn = hoverTarget;
   // A body can be dragged while listening; controls always retain their click.
-  if (pressedOn && ['pill', 'body', 'pending', 'meeting'].includes(pressedOn)) {
-    dragStart = dragLast = {x: event.screenX, y: event.screenY};
+  if (pressedOn && ['pill', 'handsfree', 'meetingStart', 'hub', 'body', 'pending', 'meeting'].includes(pressedOn)) {
+    dragStart = dragLast = { x: event.screenX, y: event.screenY };
     canvas.setPointerCapture?.(event.pointerId);
   }
-  if (pressedOn === 'pill') S.press.target = 0.96;
   wake();
 });
 canvas.addEventListener('pointermove', (event) => {
-  mouse = logicalPoint({x:event.clientX, y:event.clientY});
+  mouse = { x: event.clientX, y: event.clientY };
   if (!dragStart) return;
-  const point = {x: event.screenX, y: event.screenY};
+  const point = { x: event.screenX, y: event.screenY };
   if (!dragging && Math.hypot(point.x - dragStart.x, point.y - dragStart.y) > 6) dragging = true;
   if (dragging) {
-    window.bridge.pillDrag({x: point.x - dragLast.x, y: point.y - dragLast.y});
+    window.bridge.pillDrag({ x: point.x - dragLast.x, y: point.y - dragLast.y });
     dragLast = point;
   }
 });
 canvas.addEventListener('pointerup', (event) => {
-  mouse = logicalPoint({x:event.clientX, y:event.clientY});
+  mouse = { x: event.clientX, y: event.clientY };
   hoverTarget = findHoverTarget(layout(performance.now()));
   const released = pressedOn;
   const wasDragging = dragging;
-  if (wasDragging) window.bridge.pillDragEnd();
+  // Main aims the drop glide from where the pill is drawn.
+  if (wasDragging) window.bridge.pillDragEnd(pillCenter(S.w.x, S.h.x));
   dragging = false; dragStart = dragLast = null;
   if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
   pressedOn = null;
-  S.press.target = 1;
   if (!wasDragging && released && released === hoverTarget) {
-    const action = { pill: 'dictate', stop: 'stop', cancel: 'cancel', meeting: 'meeting_open', meetingStop: 'meeting_stop', hub: 'open_hub', pending: 'pending_open' }[released];
+    const action = ACTIONS[released];
     if (action) window.bridge.pillAction(action);
   }
   wake();
@@ -355,7 +381,7 @@ canvas.addEventListener('pointerup', (event) => {
 function cancelDrag(notify = true) {
   if (notify && dragging) window.bridge.pillDragCancel();
   dragging = false; dragStart = dragLast = null;
-  pressedOn = null; S.press.target = 1;
+  pressedOn = null;
   wake();
 }
 canvas.addEventListener('pointercancel', () => cancelDrag());
@@ -367,8 +393,9 @@ window.bridge.onDragCancelled(() => cancelDrag(false));
 
 // --- Layout -------------------------------------------------------------------
 
+const ACTIONS = { pill: 'dictate', handsfree: 'dictate', meetingStart: 'meeting_start', stop: 'stop', cancel: 'cancel', meeting: 'meeting_open', meetingStop: 'meeting_stop', hub: 'open_hub', pending: 'pending_open' };
 const restVisible = () => (idlePill || meetingSince !== null || pendingCount > 0) && !gameMode;
-const currentHint = () => pendingCount ? (hovering ? `Click a text field · ${pendingCount} waiting` : `${pendingCount} waiting`) : HINT;
+const currentHint = () => hovering ? `Click a text field · ${pendingCount} waiting` : `${pendingCount} waiting`;
 const meetingVisible = () => meetingSince !== null && !gameMode;
 // Fixed templates prevent the capsule from moving sideways every second.
 function meetingClock() {
@@ -380,10 +407,13 @@ function meetingClock() {
 
 // What the pill should look like right now; the springs chase these values.
 function layout(now) {
-  const notice = mode === 'listen' && noticeText && now < noticeUntil;
+  const quiet = mode === 'listen' && now - lastHeardAt > QUIET_AFTER_MS;
+  const notice = mode === 'listen' && ((noticeText && now < noticeUntil) || quiet);
+  const noticeLabel = noticeText && now < noticeUntil ? noticeText : QUIET_NOTICE;
   const active = { h: ACTIVE_H, alpha: 1, rise: 0, body: 0.94 };
+  const rest = restSize();
   const t = {
-    w: REST.w, h: REST.h, alpha: restVisible() ? 1 : 0, rise: restVisible() ? 0 : 8, body: 0.72,
+    w: rest.w, h: rest.h, alpha: restVisible() ? 1 : 0, rise: restVisible() ? 0 : 8, body: 0.72,
     pitch: S.pitch.target, work: S.work.target,
     meter: 0, check: 0, text: 0, controls: 0, hint: 0, meeting: 0, mstop: 0, hub: 0, label: '', labelColor: null, notice,
   };
@@ -393,13 +423,15 @@ function layout(now) {
         w: textWidth(meetingClock().length > 5 ? '00:00:00' : '00:00') + (hovering ? 66 : 40),
         h: 26, meeting: 1, mstop: hovering ? 1 : 0, body: 0.94,
       });
-      else if (restVisible() && (hovering || pendingCount)) Object.assign(t, {
+      else if (restVisible() && pendingCount) Object.assign(t, {
         w: textWidth(currentHint()) + (hovering ? 64 : 36), h: 28, hint: 1, body: 0.94, hub: hovering ? 1 : 0,
       });
+      else if (restVisible() && hovering) Object.assign(t, { w: ICONS_W, h: 30, hub: 1, body: 0.94 });
       break;
     case 'listen':
       Object.assign(t, active);
-      if (notice) Object.assign(t, { w: labelWidth(noticeText, 36), text: 1, label: noticeText, labelColor: AMBER });
+      if (notice) Object.assign(t, { w: labelWidth(noticeLabel, 36), text: 1, label: noticeLabel,
+        labelColor: noticeLabel === QUIET_NOTICE ? null : AMBER, quiet: noticeLabel === QUIET_NOTICE });
       else Object.assign(t, { w: locked ? LOCKED_W : LISTEN_W, meter: 1, work: 0, pitch: LISTEN_PITCH, controls: locked ? 1 : 0 });
       break;
     case 'processing':
@@ -415,92 +447,89 @@ function layout(now) {
       Object.assign(t, active, { w: labelWidth(message, 36), text: 1, label: message, labelColor: ERROR_TEXT });
       break;
   }
-  // Side capsules never contain a status label, elapsed time or app name.
-  // The waveform becomes vertical; recognizable action icons remain upright.
-  if (sideDock()) {
-    if (mode === 'rest' && meetingVisible()) Object.assign(t, {w:hovering ? 104 : 72, h:30});
-    else if (mode === 'rest' && restVisible() && (hovering || pendingCount)) Object.assign(t, {w:hovering ? 92 : 56, h:30});
-    else if (mode === 'error' || mode === 'saved' || notice) Object.assign(t, {w:48, h:34});
-    t.label = '';
-  }
-  t.w = Math.min(t.w, Math.max(34, logicalWidth() - 16));
-  t.h = Math.min(t.h, Math.max(7, logicalHeight() - EDGE_GAP));
+  // On a side dock the voice meter stands upright along the screen edge.
+  if (sideDock() && t.meter && !t.controls) [t.w, t.h] = [t.h, t.w];
+  // While dragged, the pill is just a ball under the cursor.
+  t.ball = dragging ? 1 : 0;
+  if (dragging) Object.assign(t, { w: BALL, h: BALL, alpha: 1, rise: 0, body: 0.94, meter: 0, check: 0,
+    text: 0, controls: 0, hint: 0, meeting: 0, mstop: 0, hub: 0 });
+  if (dockLeaving) t.alpha = 0;
+  t.w = Math.min(t.w, MAX_W);
+  t.h = Math.min(t.h, Math.max(7, innerHeight - 8));
   return t;
 }
 
-function pillCenterY(h, rise) {
-  return logicalHeight() - Math.min(EDGE_GAP, Math.max(0, logicalHeight() - h)) - h / 2 + rise;
+// --- Hit area -----------------------------------------------------------------
+// The clickable rectangles, from the layout targets (not the animated values),
+// so they don't wobble while the pill changes shape. The resting handle is a
+// thin line, so it gets a generous catch area; that area stays clear of the
+// outermost pixels of the screen, where scrollbars and window edges live.
+// While the pill is shown open, the catch area stays included so a cursor
+// near the edge can't flicker between the two.
+
+const CATCH_ALONG = DockGeometry.ACTIVE_LENGTH, EDGE_CLEAR = 18, CATCH_DEPTH = 34;
+let lastHitKey = '';
+
+function restCatchArea() {
+  const rest = restSize(), c = pillCenter(rest.w, rest.h);
+  if (dock === 'middle-left') return { x: EDGE_CLEAR, y: c.y - CATCH_ALONG / 2, w: CATCH_DEPTH, h: CATCH_ALONG };
+  if (dock === 'middle-right') return { x: innerWidth - EDGE_CLEAR - CATCH_DEPTH, y: c.y - CATCH_ALONG / 2, w: CATCH_DEPTH, h: CATCH_ALONG };
+  return { x: c.x - CATCH_ALONG / 2, y: innerHeight - EDGE_CLEAR - CATCH_DEPTH, w: CATCH_ALONG, h: CATCH_DEPTH };
 }
 
-// On a side the pill keeps its edge against the screen and grows inward;
-// at the bottom it grows out from the middle.
-function pillCenterX(w) { return logicalWidth() / 2; }
-
-// The clickable area, from the layout targets (not the animated values), so
-// the hover region doesn't wobble while the pill moves.
-let lastHitKey = '';
 function reportHitRect(t) {
-  let rect = null;
-  const cx = pillCenterX(t.w);
-  if (mode === 'rest' && (meetingVisible() || (pendingCount && restVisible()))) {
-    const cy = pillCenterY(t.h, 0);
-    rect = { x: cx - t.w / 2 - 4, y: cy - t.h / 2 - 4, w: t.w + 8, h: t.h + 8 };
-  } else if (mode === 'rest' && restVisible()) {
-    const restCy = pillCenterY(REST.h, 0);
-    const restCx = pillCenterX(REST.w);
-    rect = { x: restCx - 36, y: restCy - 13, w: 72, h: 26 };
-    // Hovered, it also covers the expanded pill. The resting area stays
-    // included so a cursor near the edge can't flicker between the two.
-    if (hovering) {
-      const cy = pillCenterY(t.h, 0);
-      const top = Math.min(rect.y, cy - t.h / 2 - 5), bottom = Math.max(rect.y + rect.h, cy + t.h / 2 + 5);
-      const half = Math.max(36, t.w / 2 + 4);
-      const left = Math.min(rect.x, cx - half), right = Math.max(rect.x + rect.w, cx + half);
-      rect = { x: left, y: top, w: right - left, h: bottom - top };
-    }
-  } else if (mode !== 'rest' && t.alpha) {
-    const cy = pillCenterY(t.h, 0);
-    rect = { x: cx - t.w / 2 - 4, y: cy - t.h / 2 - 4, w: t.w + 8, h: t.h + 8 };
+  const rects = [];
+  if (t.alpha > 0) {
+    const c = pillCenter(t.w, t.h);
+    rects.push({ x: c.x - t.w / 2 - 6, y: c.y - t.h / 2 - 6, w: t.w + 12, h: t.h + 12 });
+    if (mode === 'rest') rects.push(restCatchArea());
   }
-  if (rect) rect = physicalRect(rect);
-  if (rect) rect = { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
-  const key = rect ? `${rect.x},${rect.y},${rect.w},${rect.h}` : '';
+  const rounded = rects.map((r) => ({ x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) }));
+  const key = rounded.map((r) => `${r.x},${r.y},${r.w},${r.h}`).join(';');
   if (key !== lastHitKey) {
     lastHitKey = key;
-    window.bridge.setHitRect(rect);
+    window.bridge.setHitRect(rounded.length ? rounded : null);
   }
 }
 
-// Which control is under the cursor: the resting pill, or the hands-free
-// stop/cancel buttons.
+// Which control is under the cursor: the resting pill, its menu button, or
+// the hands-free stop/cancel buttons. Hidden controls are never hit.
 function findHoverTarget(t) {
-  if (!hovering || !mouse) return null;
+  if (!pointerInside || !mouse) return null;
+  const c = pillCenter(t.w, t.h), right = c.x + t.w / 2;
   if (mode === 'rest' && meetingVisible()) {
-    const stopX = pillCenterX(t.w) + t.w / 2 - 16;
-    return mouse.x > stopX - 12 ? 'meetingStop' : 'meeting';
+    return S.mstop.x > 0.5 && mouse.x > right - 28 ? 'meetingStop' : 'meeting';
+  }
+  if (mode === 'rest' && restVisible() && pendingCount) {
+    if (S.hub.x > 0.5 && mouse.x > right - 30 && Math.abs(mouse.y - c.y) <= t.h / 2 + 6) return 'hub';
+    return 'pending';
   }
   if (mode === 'rest' && restVisible()) {
-    if (mouse.x > pillCenterX(t.w) + t.w / 2 - 30) return 'hub';
-    return pendingCount ? 'pending' : 'pill';
+    if (S.hub.x < 0.5) return 'pill';
+    const left = c.x - t.w / 2;
+    let nearest = 'pill', best = Infinity;
+    for (const [id, offset] of ICON_SLOTS) {
+      const d = Math.abs(mouse.x - (left + offset));
+      if (d < best) { best = d; nearest = id; }
+    }
+    return nearest;
   }
   if (mode === 'listen' && locked && !t.notice) {
-    const cx = pillCenterX(t.w), cy = pillCenterY(t.h, 0);
-    const near = (x) => Math.hypot(mouse.x - x, mouse.y - cy) <= 14;
-    if (near(cx - t.w / 2 + 18)) return 'cancel';
-    if (near(cx + t.w / 2 - 18)) return 'stop';
+    const near = (x) => Math.hypot(mouse.x - x, mouse.y - c.y) <= 14;
+    if (near(c.x - t.w / 2 + 18)) return 'cancel';
+    if (near(right - 18)) return 'stop';
   }
   return mode !== 'rest' ? 'body' : null;
 }
 
-// Native upright tooltips carry the words omitted from vertical capsules.
 // Semantic controls give assistive technology the same status and action names.
-const actionNames = {pill:'Start dictation', stop:'Stop dictation', cancel:'Cancel dictation', meeting:'Open meeting', meetingStop:'Stop meeting', hub:'Open Syllune', pending:'Open waiting dictations', body:'Drag to move'};
+const actionNames = {pill:'Start dictation', handsfree:'Hands-free dictation', meetingStart:'Start meeting', stop:'Stop dictation', cancel:'Cancel dictation', meeting:'Open meeting', meetingStop:'Stop meeting', hub:'Open Syllune', pending:'Open waiting dictations', body:'Drag to move'};
 let semanticKey = '';
 function updateAccessibility(t) {
   const status = mode === 'rest' ? (meetingVisible() ? `Meeting recording, ${meetingClock()}` : pendingCount ? `${pendingCount} dictations waiting for a text field` : 'Ready to dictate')
-    : mode === 'listen' ? (t.notice ? noticeText : locked ? 'Hands-free dictation recording' : 'Dictation recording')
+    : mode === 'listen' ? (t.notice ? t.label : locked ? 'Hands-free dictation recording' : 'Dictation recording')
     : mode === 'processing' ? 'Preparing dictation' : mode === 'error' ? message : mode === 'saved' ? message : 'Dictation inserted';
-  const labels = mode === 'rest' ? (meetingVisible() ? ['meeting','meetingStop'] : pendingCount ? ['pending','hub'] : ['pill','hub']) : mode === 'listen' && locked && !t.notice ? ['cancel','stop'] : [];
+  const labels = mode === 'rest' ? (meetingVisible() ? ['meeting','meetingStop'] : pendingCount ? ['pending','hub'] : ['handsfree','meetingStart','hub']) : mode === 'listen' && locked && !t.notice ? ['cancel','stop'] : [];
   const key = `${status}|${labels.join(',')}`;
   if (key !== semanticKey) {
     semanticKey = key;
@@ -509,7 +538,7 @@ function updateAccessibility(t) {
     actions.replaceChildren(...labels.map(id => {
       const button = document.createElement('button');
       button.textContent = actionNames[id]; button.setAttribute('aria-label', actionNames[id]);
-      button.addEventListener('click', () => window.bridge.pillAction({pill:'dictate',stop:'stop',cancel:'cancel',meeting:'meeting_open',meetingStop:'meeting_stop',hub:'open_hub',pending:'pending_open'}[id]));
+      button.addEventListener('click', () => window.bridge.pillAction(ACTIONS[id]));
       return button;
     }));
   }
@@ -539,15 +568,12 @@ function draw(now, t) {
   const alpha = clamp(S.alpha.x);
   if (alpha < 0.004) return;
 
-  ctx.save();
-  if (align === 'left') {ctx.translate(innerWidth, 0); ctx.rotate(Math.PI / 2);}
-  if (align === 'right') {ctx.translate(0, innerHeight); ctx.rotate(-Math.PI / 2);}
-
-  const h = Math.max(4, S.h.x);
-  const w = Math.max(h, S.w.x);      // never narrower than tall, even mid-bounce
-  const cx = pillCenterX(w) + S.shake.x;
-  const cy = pillCenterY(h, S.rise.x);
-  const x = cx - w / 2, y = cy - h / 2, r = h / 2;
+  const w = Math.max(4, S.w.x), h = Math.max(4, S.h.x);
+  const thickness = Math.min(w, h), r = thickness / 2;
+  const center = pillCenter(w, h), edge = towardEdge();
+  const cx = center.x + edge.x * S.rise.x + S.shake.x;
+  const cy = center.y + edge.y * S.rise.x;
+  const x = cx - w / 2, y = cy - h / 2;
   // Bars sit on whole device pixels once nothing is sliding sideways.
   const still = S.shake.resting && S.pitch.resting;
   const snap = (v) => (still ? Math.round(v * dpr) / dpr : v);
@@ -558,7 +584,7 @@ function draw(now, t) {
   ctx.translate(cx, cy); ctx.scale(scale, scale); ctx.translate(-cx, -cy);
 
   // Body: dark glass with a soft shadow that grows with the pill.
-  const size = clamp((h - REST.h) / (ACTIVE_H - REST.h));
+  const size = clamp((thickness - REST.h) / (ACTIVE_H - REST.h));
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.34)';
   ctx.shadowBlur = 6 + 12 * size;
@@ -576,73 +602,33 @@ function draw(now, t) {
 
   // Each layer shows only while it physically fits the pill as it is this
   // frame, so nothing is ever clipped by, or drawn over, a morphing neighbour.
+  const vertical = h > w + 1, length = Math.max(w, h);
   const meterSpan = (BAR_COUNT - 1) * S.pitch.x + BAR_W;
-  const meterOpacity = centerOpacity('meter') * clamp((w - meterSpan - 10) / 12) * clamp((h - 16) / 8);
+  const meterOpacity = centerOpacity('meter') * clamp((length - meterSpan - 10) / 12) * clamp((thickness - 16) / 8);
   const controlsOpacity = clamp(S.controls.x) * clamp((w - meterSpan - 56) / 16);
-  const checkOpacity = centerOpacity('check') * clamp((h - 18) / 8);
+  const checkOpacity = centerOpacity('check') * clamp((thickness - 18) / 8);
 
   ctx.save();
   ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.clip();
-  drawMeter(cx, cy, h, now, meterOpacity, snap);
+  drawMeter(cx, cy, thickness, vertical, now, meterOpacity, snap);
   drawControls(x, w, cy, controlsOpacity);
-  if (sideDock()) drawSideContent(cx, cy, w, now, t, checkOpacity);
-  else { drawContent(cx, cy, w, now, t, checkOpacity); drawMeeting(cx, cy, w); }
-  if (S.hub.x > 0.01) {
-    const hx = cx + w / 2 - 19;
-    uprightAt(hx, cy, () => {
-      ctx.strokeStyle = rgba(WHITE, clamp(S.hub.x) * .75);
-      ctx.lineWidth = 1.3; ctx.lineCap = 'round'; ctx.beginPath();
-      for (const yy of [-3, 1, 5]) {ctx.moveTo(-4, yy); ctx.lineTo(4, yy);}
-      ctx.stroke();
-    });
-  }
+  drawContent(cx, cy, w, now, t, checkOpacity);
+  drawMeeting(cx, cy, w, thickness);
+  if (pendingCount) drawHubButton(cx + w / 2 - 19, cy, clamp(S.hub.x));
+  else drawIcons(cx - w / 2, cy, w, clamp(S.hub.x));
+  drawBallLogo(cx, cy, clamp(S.ball.x));
   ctx.restore();
 
   ctx.restore();
-
-  ctx.restore();
-}
-
-// Counter-rotate only the glyph, leaving the vertical capsule and meter alone.
-function uprightAt(x, y, paint) {
-  ctx.save(); ctx.translate(x, y);
-  if (align === 'left') ctx.rotate(-Math.PI / 2);
-  if (align === 'right') ctx.rotate(Math.PI / 2);
-  paint(); ctx.restore();
-}
-
-function drawSideContent(cx, cy, w, now, t, checkOpacity) {
-  if (checkOpacity > .01) uprightAt(cx, cy, () => drawCheck(0, 0, checkOpacity, mode === 'saved' ? VIOLET : GREEN, now));
-  if ((mode === 'error' || t.notice) && S.text.x > .01) uprightAt(cx, cy, () => {
-    ctx.strokeStyle=rgba(t.notice ? AMBER : ERROR_TEXT, clamp(S.text.x)); ctx.lineWidth=1.6;
-    ctx.beginPath(); ctx.arc(0,0,7,0,2*Math.PI); ctx.moveTo(0,-4); ctx.lineTo(0,1); ctx.stroke();
-    ctx.fillStyle=ctx.strokeStyle; ctx.beginPath(); ctx.arc(0,4,1,0,2*Math.PI); ctx.fill();
-  });
-  const meetingOpacity = centerOpacity('meeting');
-  if (meetingOpacity > .01) {
-    ctx.fillStyle=rgba(STOP_RED, meetingOpacity);
-    ctx.beginPath(); ctx.arc(cx - 12 * clamp(S.mstop.x),cy,3.5,0,2*Math.PI); ctx.fill();
-    if (S.mstop.x > .01) {ctx.fillStyle=rgba(STOP_RED,clamp(S.mstop.x)*meetingOpacity); ctx.beginPath();ctx.roundRect(cx+w/2-20,cy-4,8,8,2);ctx.fill();}
-  }
-  const hintOpacity = centerOpacity('hint');
-  if (hintOpacity > .01) uprightAt(cx - 12*clamp(S.hub.x), cy, () => {
-    ctx.strokeStyle=rgba(WHITE, .85*hintOpacity); ctx.lineWidth=1.5;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();
-    if (pendingCount) {
-      ctx.roundRect(-7,-5,14,10,2);ctx.moveTo(-7,-2);ctx.lineTo(-3,-2);ctx.lineTo(-1,1);ctx.lineTo(2,1);ctx.lineTo(4,-2);ctx.lineTo(7,-2);
-    } else {
-      ctx.roundRect(-3,-7,6,10,3);ctx.moveTo(-6,-1);ctx.bezierCurveTo(-6,7,6,7,6,-1);ctx.moveTo(0,5);ctx.lineTo(0,8);ctx.moveTo(-3,8);ctx.lineTo(3,8);
-    }
-    ctx.stroke();
-  });
 }
 
 // Eleven bars, mirrored around the middle: the middle bar is the lowest voice
 // band, the outer ones the highest. While working, the bars become dots and a
 // soft pulse leaves the middle toward both ends, mirrored the same way, so it
 // breathes rather than scrolls.
-function drawMeter(cx, cy, h, now, opacity, snap) {
+function drawMeter(cx, cy, thickness, vertical, now, opacity, snap) {
   if (opacity < 0.01) return;
-  const maxH = Math.max(DOT, h - 18);
+  const maxH = Math.max(DOT, thickness - 18);
   const work = clamp(S.work.x);
   const pulseBand = (((now - workSince) / RIPPLE_MS) % 1) * (BAND_COUNT + 2) - 1;
   const color = mixColor(WHITE, VIOLET, clamp(S.note.x));
@@ -658,7 +644,8 @@ function drawMeter(cx, cy, h, now, opacity, snap) {
     const a = 0.92 * opacity * edgeFade * (1 + (rippleAlpha - 1) * work);
     ctx.fillStyle = rgba(color, a);
     ctx.beginPath();
-    ctx.roundRect(snap(cx + offset * S.pitch.x - BAR_W / 2), cy - barH / 2, BAR_W, barH, BAR_W / 2);
+    if (vertical) ctx.roundRect(cx - barH / 2, snap(cy + offset * S.pitch.x - BAR_W / 2), barH, BAR_W, BAR_W / 2);
+    else ctx.roundRect(snap(cx + offset * S.pitch.x - BAR_W / 2), cy - barH / 2, BAR_W, barH, BAR_W / 2);
     ctx.fill();
   }
 }
@@ -682,6 +669,66 @@ function drawControls(x, w, cy, opacity) {
   ctx.beginPath(); ctx.roundRect(stopX - 4, cy - 4, 8, 8, 2); ctx.fill();
 }
 
+// The hovered resting pill: the logo, then hands-free dictation, start a
+// meeting and the menu. The icons appear once the pill is wide enough.
+function drawIcons(left, cy, w, opacity) {
+  opacity *= clamp((w - ICONS_W + 24) / 24);
+  if (opacity < 0.01) return;
+  const logoX = ICON_SLOTS[0][1];
+  if (LOGO.complete && LOGO.naturalWidth) {
+    ctx.save(); ctx.globalAlpha *= opacity;
+    ctx.drawImage(LOGO, left + logoX - 8, cy - 8, 16, 16);
+    ctx.restore();
+  }
+  ctx.fillStyle = `rgba(255,255,255,${0.12 * opacity})`;
+  ctx.fillRect(left + 34, cy - 7, 1, 14);
+  for (const [id, offset] of ICON_SLOTS.slice(1)) {
+    const x = left + offset;
+    if (hoverTarget === id) {
+      ctx.fillStyle = `rgba(255,255,255,${(pressedOn === id ? 0.18 : 0.1) * opacity})`;
+      ctx.beginPath(); ctx.arc(x, cy, 11, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.strokeStyle = rgba(WHITE, 0.82 * opacity);
+    ctx.lineWidth = 1.4; ctx.lineCap = 'round';
+    ctx.beginPath();
+    if (id === 'handsfree') {
+      ctx.roundRect(x - 2.5, cy - 6, 5, 8, 2.5);
+      ctx.moveTo(x - 5, cy - 0.5); ctx.arc(x, cy - 0.5, 5, Math.PI, 0, true);
+      ctx.moveTo(x, cy + 4.5); ctx.lineTo(x, cy + 6.5);
+      ctx.stroke();
+    } else if (id === 'meetingStart') {
+      ctx.arc(x, cy, 5.5, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = rgba(STOP_RED, 0.9 * opacity);
+      ctx.beginPath(); ctx.arc(x, cy, 2.4, 0, Math.PI * 2); ctx.fill();
+    } else {
+      for (const dy of [-3.5, 0, 3.5]) { ctx.moveTo(x - 4, cy + dy); ctx.lineTo(x + 4, cy + dy); }
+      ctx.stroke();
+    }
+  }
+}
+
+// The logo inside the ball while the pill is dragged.
+function drawBallLogo(cx, cy, opacity) {
+  if (opacity < 0.05 || !LOGO.complete || !LOGO.naturalWidth) return;
+  ctx.save(); ctx.globalAlpha *= opacity;
+  ctx.drawImage(LOGO, cx - 8, cy - 8, 16, 16);
+  ctx.restore();
+}
+
+// The open-Syllune button at the end of the pill while dictations wait.
+function drawHubButton(x, cy, opacity) {
+  if (opacity < 0.01) return;
+  if (hoverTarget === 'hub') {
+    ctx.fillStyle = `rgba(255,255,255,${0.1 * opacity})`;
+    ctx.beginPath(); ctx.arc(x, cy, 10, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.strokeStyle = rgba(WHITE, 0.75 * opacity);
+  ctx.lineWidth = 1.3; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (const dy of [-3.5, 0, 3.5]) { ctx.moveTo(x - 4, cy + dy); ctx.lineTo(x + 4, cy + dy); }
+  ctx.stroke();
+}
+
 // Checkmark, message text and the resting hint.
 function drawContent(cx, cy, w, now, t, checkOpacity) {
   const textOpacity = centerOpacity('text');
@@ -695,7 +742,7 @@ function drawContent(cx, cy, w, now, t, checkOpacity) {
     drawText(label, startX + 24, cy, textOpacity * fit(w, labelWidth(label, 62)), 'left', null);
   } else {
     drawCheck(cx, cy, checkOpacity, accent, now);
-    if (label) drawText(label, cx, cy, textOpacity * fit(w, labelWidth(label, 36)), 'center', t.labelColor);
+    if (label) drawText(label, cx, cy, (t.quiet ? 0.62 : 1) * textOpacity * fit(w, labelWidth(label, 36)), 'center', t.labelColor);
   }
   if (hintOpacity > 0.01) drawText(currentHint(), cx - 12 * clamp(S.hub.x), cy,
     0.78 * hintOpacity * fit(w, labelWidth(currentHint(), 36)), 'center', null);
@@ -722,7 +769,6 @@ function drawCheck(x, cy, opacity, color, now) {
 }
 
 function drawText(label, x, cy, opacity, align, color) {
-  if (sideDock()) return;
   if (opacity < 0.01 || !label) return;
   ctx.font = FONT;
   ctx.textAlign = align;
@@ -732,8 +778,8 @@ function drawText(label, x, cy, opacity, align, color) {
 }
 
 // A quiet recording indicator. Only the hover stop button changes its width.
-function drawMeeting(cx, cy, w) {
-  const opacity = centerOpacity('meeting') * clamp((S.h.x - 12) / 12);
+function drawMeeting(cx, cy, w, thickness) {
+  const opacity = centerOpacity('meeting') * clamp((thickness - 12) / 12);
   if (opacity < 0.01 || meetingSince === null) return;
   const left = cx - w / 2 + 14;
   ctx.fillStyle = rgba(STOP_RED, opacity);
@@ -777,12 +823,15 @@ function frame(now) {
   S.meter.target = t.meter; S.check.target = t.check; S.text.target = t.text;
   S.controls.target = t.controls; S.hint.target = t.hint;
   S.meeting.target = t.meeting; S.mstop.target = t.mstop;
-  S.hub.target = t.hub;
+  S.hub.target = t.hub; S.ball.target = t.ball;
   S.note.target = noteMode ? 1 : 0;
+  // Leaving a dock, the pill sinks into the spot it was dropped on.
+  S.press.target = dockLeaving && !reducedMotion.matches ? 0.9 : pressedOn === 'pill' ? 0.96 : 1;
+  S.alpha.configure(dockLeaving ? ALPHA_LEAVE_S : ALPHA_S);
   timeLayers();
   hoverTarget = findHoverTarget(t);
   updateAccessibility(t);
-  canvas.style.cursor = hoverTarget ? 'pointer' : 'default';
+  canvas.style.cursor = dragging ? 'grabbing' : hoverTarget ? 'pointer' : 'default';
 
   const springs = Object.values(S);
   for (let done = 0; done < dt; done += 1 / 480) {
@@ -793,8 +842,13 @@ function frame(now) {
   draw(now, t);
   reportHitRect(t);
 
+  if (dockLeaving && !dockLeftSent && S.alpha.x < 0.01) {
+    dockLeftSent = true;
+    window.bridge.dockLeft();
+  }
+
   const moving = mode !== 'rest' || pressedOn || springs.some((s) => !s.resting)
-              || voice.shown.some((v) => v > 0.001);
+              || voice.shown.some((v) => v > 0.001) || (dockLeaving && !dockLeftSent);
   if (moving) {
     requestAnimationFrame(frame);
   } else {

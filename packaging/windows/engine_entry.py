@@ -9,5 +9,5 @@ import onnxruntime  # noqa: F401
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()
-    from whisper_key.main import main
+    from syllune.main import main
     main()

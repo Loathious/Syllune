@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from whisper_key import brand, update_check
+from syllune import brand, update_check
 
 
 class DistributionTests(unittest.TestCase):
@@ -21,6 +21,6 @@ class DistributionTests(unittest.TestCase):
         thread.assert_not_called()
 
     def test_frozen_version_does_not_need_source_pyproject(self):
-        from whisper_key.utils import get_version
+        from syllune.utils import get_version
         with patch('sys.frozen', True, create=True):
             self.assertEqual(brand.VERSION, get_version())

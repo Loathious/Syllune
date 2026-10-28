@@ -9,9 +9,9 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from whisper_key.state_manager import StateManager
-from whisper_key.whisper_engine import WhisperEngine
-from whisper_key.whisper_engine_cpp import WhisperEngineCpp
+from syllune.state_manager import StateManager
+from syllune.whisper_engine import WhisperEngine
+from syllune.whisper_engine_cpp import WhisperEngineCpp
 
 
 class MemoryConfig:
@@ -83,7 +83,7 @@ class QualityTests(unittest.TestCase):
         self.assertIsNone(engine.last_error)
 
     def test_deferred_engine_loads_selected_default_on_request(self):
-        with patch('whisper_key.whisper_engine.WhisperModel') as factory:
+        with patch('syllune.whisper_engine.WhisperModel') as factory:
             engine = WhisperEngine(model_key='base', defer_load=True)
             factory.assert_not_called()
             self.assertIsNone(engine.model)
@@ -122,42 +122,15 @@ class QualityTests(unittest.TestCase):
                 patch('faster_whisper.transcribe.get_suppressed_tokens', return_value=()):
             self.assertEqual('Words.', engine._transcribe_quick(np.ones(16000))[0])
 
-    def test_quality_is_committed_only_when_model_switch_succeeds(self):
+    def test_quality_change_is_instant_and_never_switches_model(self):
         state = self.state()
         state.apply_quality('best')
-        self.assertEqual('balanced', state.current_quality())
-        self.assertTrue(state.is_model_loading)
-        self.finish_switch(state, True)
         self.assertEqual('best', state.current_quality())
-        self.assertFalse(state.is_model_loading)
-
-    def test_quality_preference_cannot_trigger_a_deferred_model_download(self):
-        state = self.state()
-        state.whisper_engine.model = None
-        state.config_manager.values['quality'] = 'best'
-        state.apply_quality()
         self.assertEqual([], self.requests)
         self.assertFalse(state.is_model_loading)
-
-    def test_failed_quality_change_retains_previous_quality_and_model(self):
-        state = self.state()
-        state.apply_quality('best')
-        self.finish_switch(state, False)
-        self.assertEqual('balanced', state.current_quality())
         self.assertEqual('large-v3-turbo', state.whisper_engine.model_key)
-        self.assertFalse(state.is_model_loading)
-
-    def test_latest_quality_request_is_applied_after_active_switch(self):
-        state = self.state()
-        state.apply_quality('best')
         state.apply_quality('fast')
-        self.assertEqual('balanced', state.current_quality())
-        self.finish_switch(state, True)
-        self.assertEqual('large-v3-turbo', self.requests[-1][0])
-        self.finish_switch(state, True)
-        self.assertEqual('fast', state.current_quality())
         self.assertEqual(1, state.whisper_engine.beam_size)
-        self.assertFalse(state.is_model_loading)
 
     def test_quality_change_during_processing_leaves_inflight_decode_settings(self):
         state = self.state()
@@ -207,7 +180,7 @@ class QualityTests(unittest.TestCase):
             old.model.unload_model.assert_called_once_with(to_cpu=True)
             raise RuntimeError('requested model unavailable')
 
-        with patch('whisper_key.whisper_engine.WhisperModel', side_effect=unavailable), \
+        with patch('syllune.whisper_engine.WhisperModel', side_effect=unavailable), \
                 patch('threading.excepthook') as uncaught:
             engine.change_model('large', notices.append)
             worker = engine._loading_thread
@@ -228,7 +201,7 @@ class QualityTests(unittest.TestCase):
             if 'ready' in message.lower():
                 raise RuntimeError('UI no longer exists')
 
-        with patch('whisper_key.whisper_engine.WhisperModel', return_value=replacement), \
+        with patch('syllune.whisper_engine.WhisperModel', return_value=replacement), \
                 patch('threading.excepthook'):
             engine.change_model('large', observer)
             worker = engine._loading_thread
@@ -260,7 +233,7 @@ class QualityTests(unittest.TestCase):
             if 'ready' in message.lower():
                 finished.set()
 
-        with patch('whisper_key.whisper_engine.WhisperModel', side_effect=replacement):
+        with patch('syllune.whisper_engine.WhisperModel', side_effect=replacement):
             transcriber.start()
             try:
                 self.assertTrue(decoding.wait(2))
@@ -285,7 +258,7 @@ class QualityTests(unittest.TestCase):
             if 'ready' in message.lower():
                 engine.change_model('small', second)
 
-        with patch('whisper_key.whisper_engine.WhisperModel', return_value=Mock()):
+        with patch('syllune.whisper_engine.WhisperModel', return_value=Mock()):
             engine.change_model('large', first)
             self.assertTrue(finished.wait(2))
         self.assertEqual('small', engine.model_key)
@@ -297,7 +270,7 @@ class QualityTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 engine.change_model('large')
         finished = threading.Event()
-        with patch('whisper_key.whisper_engine.WhisperModel', return_value=Mock()):
+        with patch('syllune.whisper_engine.WhisperModel', return_value=Mock()):
             self.assertTrue(engine.change_model('small', lambda message: finished.set() if 'ready' in message.lower() else None))
             self.assertTrue(finished.wait(2))
         self.assertEqual('small', engine.model_key)
@@ -316,9 +289,9 @@ class QualityTests(unittest.TestCase):
         state.smart_editor.edit.side_effect = RuntimeError('local AI unavailable')
         state._vocabulary = lambda cfg: []
         state.whisper_engine.transcribe_paragraphs = lambda audio: ['First words.', 'Second words.']
-        with patch('whisper_key.state_manager.postprocess', side_effect=lambda text, cfg: text), \
-                patch('whisper_key.notes.notes_folder', return_value='unused'), \
-                patch('whisper_key.notes.save_note') as save:
+        with patch('syllune.state_manager.postprocess', side_effect=lambda text, cfg: text), \
+                patch('syllune.notes.notes_folder', return_value='unused'), \
+                patch('syllune.notes.save_note') as save:
             state._handle_note(np.ones(16000))
         self.assertEqual('First words.\n\nSecond words.', save.call_args.args[0])
 

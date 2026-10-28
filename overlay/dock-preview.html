@@ -2,20 +2,37 @@
 <html><head><meta charset="utf-8"><title>Syllune dock preview</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
 <style>
+/* One spot the pill can be dropped on: the same horizontal capsule, at the
+   same place and size, as the recording pill on that dock. */
 html, body {margin:0; width:100%; height:100%; overflow:hidden; background:transparent; pointer-events:none}
-.dock {box-sizing:border-box; width:100%; height:100%; border:1px solid #86acd87a; border-radius:999px; background:#17243b66; display:flex; align-items:center; justify-content:center; gap:4px; transition:background 100ms,border-color 100ms}
-.dock.selected {background:#17243be8; border:2px solid #d8e2ee}
-.dock i {display:block; width:3px; height:10px; background:#d8e2eeaa; border-radius:2px}
-.dock i:nth-child(2n) {height:18px}
-.dock.side {flex-direction:column}
-.dock.side i {height:3px; width:10px}
-.dock.side i:nth-child(2n) {width:18px}
-@media(prefers-reduced-motion:reduce) {.dock {transition:none}}
+.dock {
+  box-sizing:border-box; width:100%; height:100%; border-radius:999px;
+  border:1px solid rgba(134,172,216,.42); background:rgba(23,36,59,.34);
+  display:flex; align-items:center; justify-content:center; gap:4px;
+  opacity:0; transform:scale(.94);
+  transition:opacity 160ms cubic-bezier(.23,1,.32,1), transform 160ms cubic-bezier(.23,1,.32,1),
+    background-color 120ms ease, border-color 120ms ease;
+}
+.dock.shown {opacity:1; transform:none}
+.dock.selected {background:rgba(23,36,59,.62); border-color:rgba(216,226,238,.9)}
+.dock i {display:block; width:3px; height:8px; background:rgba(216,226,238,.5); border-radius:2px; transition:background-color 120ms ease}
+.dock i:nth-child(2n) {height:14px}
+.dock.selected i {background:rgba(216,226,238,.85)}
+@media (prefers-reduced-motion: reduce) {
+  .dock {transform:none; transition:opacity 120ms ease, background-color 120ms ease, border-color 120ms ease}
+}
 </style></head><body aria-hidden="true"><div class="dock" id="dock"><i></i><i></i><i></i><i></i><i></i></div>
 <script>
 // The native window supplies geometry; this document paints only its offer.
-// The main process shares candidate selection with release.
-const dock=document.getElementById('dock');
-dock.classList.toggle('side',new URLSearchParams(location.search).get('position')!=='bottom-center');
-window.dockPreview.onHighlight(value=>dock.classList.toggle('selected',value));
+// main.js shares candidate selection with release. A null highlight fades
+// the spot out before the window hides; the next highlight fades it back in.
+const dock = document.getElementById('dock');
+window.dockPreview.onHighlight(value => {
+  if (value === null) { dock.classList.remove('shown', 'selected'); return; }
+  if (!dock.classList.contains('shown')) {
+    void dock.offsetWidth;           // start the fade from the hidden style
+    dock.classList.add('shown');
+  }
+  dock.classList.toggle('selected', value);
+});
 </script></body></html>

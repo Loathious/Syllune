@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock, MagicMock
 
 import numpy as np
-from whisper_key.meeting_recorder import MeetingRecorder, _Track
+from syllune.meeting_recorder import MeetingRecorder, _Track
 
 
 class RecorderFlushTests(unittest.TestCase):

@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 
 # ── Faking the platform layer ─────────────────────────────────────────────────
-# whisper_key.platform imports the OS backend (pyobjc / pywin32 / PIL), which
+# syllune.platform imports the OS backend (pyobjc / pywin32 / PIL), which
 # the lean CI env doesn't install, so a test that needs a module importing it
 # swaps in a stand-in for the WHOLE package. Faking only a submodule is not
 # enough: `from .platform import app` still runs the real package __init__.
@@ -40,61 +40,61 @@ def _stand_in_module(name):
 # sys.modules entries for a stand-in platform package. `app_attrs` are set on
 # the fake platform.app (TK_MAIN_THREAD_ONLY defaults to False).
 def fake_platform_modules(**app_attrs) -> dict:
-    modules = {f'whisper_key.platform.{m}': _stand_in_module(f'whisper_key.platform.{m}')
+    modules = {f'syllune.platform.{m}': _stand_in_module(f'syllune.platform.{m}')
                for m in _PLATFORM_SUBMODULES}
-    package = _stand_in_module('whisper_key.platform')
+    package = _stand_in_module('syllune.platform')
     package.IS_MACOS = package.IS_WINDOWS = False
     package.PLATFORM = 'unsupported'
     for m in _PLATFORM_SUBMODULES:
-        setattr(package, m, modules[f'whisper_key.platform.{m}'])
-    app = modules['whisper_key.platform.app']
+        setattr(package, m, modules[f'syllune.platform.{m}'])
+    app = modules['syllune.platform.app']
     app.TK_MAIN_THREAD_ONLY = False
     for key, value in app_attrs.items():
         setattr(app, key, value)
     # A MagicMock is truthy, which would start the default-microphone watcher
     # thread in any test that builds a StateManager under these fakes.
-    modules['whisper_key.platform.audio_endpoints'].is_supported = lambda: False
-    modules['whisper_key.platform'] = package
+    modules['syllune.platform.audio_endpoints'].is_supported = lambda: False
+    modules['syllune.platform'] = package
     return modules
 
 
 # For the rest of `test`: patch sys.modules with `fakes` and drop the app's own
 # modules so they re-import against them. Everything (including the attributes
-# the re-imports bind on the whisper_key package) is restored afterwards, so
+# the re-imports bind on the syllune package) is restored afterwards, so
 # nothing faked leaks into later tests.
 def reimport_under(test, fakes: dict):
     import unittest.mock as mock
-    import whisper_key
-    saved_attrs = dict(vars(whisper_key))
+    import syllune
+    saved_attrs = dict(vars(syllune))
     patcher = mock.patch.dict(sys.modules, fakes)
     patcher.start()
 
     def restore():
         patcher.stop()
-        for key in [k for k in vars(whisper_key) if k not in saved_attrs]:
-            delattr(whisper_key, key)
+        for key in [k for k in vars(syllune) if k not in saved_attrs]:
+            delattr(syllune, key)
         for key, value in saved_attrs.items():
-            setattr(whisper_key, key, value)
+            setattr(syllune, key, value)
     test.addCleanup(restore)
     for name in [n for n in sys.modules
-                 if n.startswith('whisper_key.') and n not in fakes
-                 and not n.startswith('whisper_key.platform') and n != 'whisper_key.utils']:
+                 if n.startswith('syllune.') and n not in fakes
+                 and not n.startswith('syllune.platform') and n != 'syllune.utils']:
         sys.modules.pop(name)
 
 
 class HotkeyParsingTests(unittest.TestCase):
     def test_parse_hotkey_splits_on_plus(self):
-        from whisper_key.utils import parse_hotkey
+        from syllune.utils import parse_hotkey
         self.assertEqual(parse_hotkey("ctrl+a"), ["ctrl", "a"])
         self.assertEqual(parse_hotkey("Ctrl+Shift+F1"), ["ctrl", "shift", "f1"])
 
     def test_parse_hotkey_handles_empty(self):
-        from whisper_key.utils import parse_hotkey
+        from syllune.utils import parse_hotkey
         self.assertEqual(parse_hotkey(""), [])
         self.assertEqual(parse_hotkey(None), [])
 
     def test_beautify_hotkey_uppercases(self):
-        from whisper_key.utils import beautify_hotkey
+        from syllune.utils import beautify_hotkey
         self.assertEqual(beautify_hotkey("ctrl+a"), "CTRL+A")
         self.assertEqual(beautify_hotkey(""), "")
 
@@ -104,7 +104,7 @@ class DocumentationStandardTests(unittest.TestCase):
     # describing its purpose. Enforced here so the standard can't silently decay
     # as new modules are added — a new file without a header fails the suite.
     def test_every_module_has_a_header_comment(self):
-        pkg = ROOT / "src" / "whisper_key"
+        pkg = ROOT / "src" / "syllune"
         missing = []
         for path in sorted(pkg.rglob("*.py")):
             if "__pycache__" in path.as_posix() or path.name == "__init__.py":
@@ -134,36 +134,36 @@ class VersionMetadataTests(unittest.TestCase):
         import tomllib
         with open(ROOT / "pyproject.toml", "rb") as f:
             data = tomllib.load(f)
-        self.assertEqual(data["project"]["name"], "whisper-local")
-        self.assertIn("whisper-local", data["project"]["scripts"])
-        self.assertIn("wl", data["project"]["scripts"])
+        self.assertEqual(data["project"]["name"], "syllune")
+        self.assertEqual(data["project"]["scripts"], {"syllune": "syllune.main:main"})
+        self.assertEqual(data["project"]["license"], "LicenseRef-Proprietary")
 
     def test_no_orphan_update_checker(self):
-        self.assertFalse((ROOT / "src" / "whisper_key" / "update_checker.py").exists())
+        self.assertFalse((ROOT / "src" / "syllune" / "update_checker.py").exists())
 
     def test_main_does_not_import_update_checker(self):
-        main_src = (ROOT / "src" / "whisper_key" / "main.py").read_text(encoding="utf-8")
+        main_src = (ROOT / "src" / "syllune" / "main.py").read_text(encoding="utf-8")
         self.assertNotIn("update_checker", main_src)
         self.assertNotIn("check_for_updates", main_src)
 
 
 class VoiceCommandsDefaultsTests(unittest.TestCase):
     def test_no_registry_writes_in_defaults(self):
-        defaults = (ROOT / "src" / "whisper_key" / "commands.defaults.yaml").read_text(encoding="utf-8")
+        defaults = (ROOT / "src" / "syllune" / "commands.defaults.yaml").read_text(encoding="utf-8")
         self.assertNotIn("reg add", defaults.lower())
 
 
 class WhisperBackendTests(unittest.TestCase):
     def test_default_backend_is_faster_whisper(self):
         from ruamel.yaml import YAML
-        path = ROOT / "src" / "whisper_key" / "config.defaults.yaml"
+        path = ROOT / "src" / "syllune" / "config.defaults.yaml"
         with open(path, encoding="utf-8") as f:
             cfg = YAML().load(f)
         self.assertEqual(cfg["whisper"].get("backend"), "faster_whisper")
 
     def test_whisper_cpp_module_imports_lazily(self):
         # Import the module — the heavy pywhispercpp import is lazy inside __init__
-        from whisper_key import whisper_engine_cpp
+        from syllune import whisper_engine_cpp
         self.assertTrue(hasattr(whisper_engine_cpp, 'WhisperEngineCpp'))
 
     def test_optional_dep_declared(self):
@@ -205,7 +205,7 @@ class WhisperCppTranscribeTests(unittest.TestCase):
         fake_module.Model = FakeModel
         with mock.patch.dict(sys.modules, {"pywhispercpp": types.ModuleType("pywhispercpp"),
                                            "pywhispercpp.model": fake_module}):
-            from whisper_key.whisper_engine_cpp import WhisperEngineCpp
+            from syllune.whisper_engine_cpp import WhisperEngineCpp
             engine = WhisperEngineCpp(model_key="small", **engine_kwargs)
         calls.clear()  # drop the warmup call
         return engine, calls, np.zeros(16000, dtype=np.float32)
@@ -231,19 +231,19 @@ class WhisperCppTranscribeTests(unittest.TestCase):
 
 class InstanceManagerTests(unittest.TestCase):
     def test_exposes_cleanup_pid_file(self):
-        src = (ROOT / "src" / "whisper_key" / "instance_manager.py").read_text(encoding="utf-8")
+        src = (ROOT / "src" / "syllune" / "instance_manager.py").read_text(encoding="utf-8")
         self.assertIn("def cleanup_pid_file", src)
         self.assertIn("os.kill", src)
         self.assertIn("_wait_for_lock", src)
 
     def test_main_calls_cleanup_pid_file(self):
-        main_src = (ROOT / "src" / "whisper_key" / "main.py").read_text(encoding="utf-8")
+        main_src = (ROOT / "src" / "syllune" / "main.py").read_text(encoding="utf-8")
         self.assertIn("cleanup_pid_file(instance_name)", main_src)
 
 
 class TextPostprocessTests(unittest.TestCase):
     def test_strip_filler_words(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'strip_filler_words': True}
         # "like" is a real word far more often than a filler and stays; only
         # sounds that are never words go ("um", "uh", "erm", "hmm").
@@ -251,23 +251,23 @@ class TextPostprocessTests(unittest.TestCase):
         self.assertEqual(postprocess("uh, erm, hmm, hello", cfg), "hello")
 
     def test_capitalize_first(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'capitalize_first': True}
         self.assertEqual(postprocess("hello world", cfg), "Hello world")
 
     def test_ensure_punctuation(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'ensure_punctuation': True}
         self.assertEqual(postprocess("hello world", cfg), "hello world.")
         self.assertEqual(postprocess("hello world.", cfg), "hello world.")
 
     def test_postprocess_passthrough_when_empty(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess("hello", {}), "hello")
         self.assertEqual(postprocess("", {'capitalize_first': True}), "")
 
     def test_strip_trailing_period(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'strip_trailing_period': True}
         self.assertEqual(postprocess("hello world.", cfg), "hello world")
         self.assertEqual(postprocess("done.\n", cfg), "done\n")
@@ -275,14 +275,14 @@ class TextPostprocessTests(unittest.TestCase):
         self.assertEqual(postprocess("no period here", cfg), "no period here")
 
     def test_inline_formatting_basics(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'inline_formatting': True}
         self.assertEqual(postprocess("hello comma world period", cfg), "hello, world.")
         self.assertEqual(postprocess("what time is it question mark", cfg), "what time is it?")
 
     def test_inline_formatting_custom_replaces_defaults(self):
         # Custom list replaces the English defaults (non-English use case).
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {
             'inline_formatting': True,
             'inline_formatting_replacements': [
@@ -296,7 +296,7 @@ class TextPostprocessTests(unittest.TestCase):
         self.assertEqual(postprocess("hello comma world", cfg), "hello comma world")
 
     def test_inline_formatting_extend_keeps_defaults(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {
             'inline_formatting': True,
             'inline_formatting_extend': True,
@@ -308,7 +308,7 @@ class TextPostprocessTests(unittest.TestCase):
     def test_absorb_cleans_whisper_prosody_punctuation(self):
         # Whisper adds its own commas/periods around spoken cue words; absorb should
         # eat them so the output isn't polluted (Discussion #1 bug report).
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {
             'inline_formatting': True,
             'inline_formatting_absorb_punctuation': True,
@@ -323,7 +323,7 @@ class TextPostprocessTests(unittest.TestCase):
 
     def test_absorb_off_leaves_prosody_artifacts(self):
         # Documents that WITHOUT absorb the artifacts remain (opt-in, no regression).
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {
             'inline_formatting': True,
             'inline_formatting_replacements': [{'phrase': 'comma', 'replacement': ','}],
@@ -332,7 +332,7 @@ class TextPostprocessTests(unittest.TestCase):
 
     def test_absorb_with_builtins_does_not_glue_or_eat_breaks(self):
         # SEC #4: absorb + built-in English cue words must keep spacing and newlines.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'inline_formatting': True, 'inline_formatting_absorb_punctuation': True}
         self.assertEqual(postprocess("Hello, comma, world.", cfg), "Hello, world.")
         # "new paragraph" break must survive a following cue's absorb
@@ -341,7 +341,7 @@ class TextPostprocessTests(unittest.TestCase):
 
     def test_absorb_respects_word_boundary(self):
         # "comma" must not fire inside "commander"/"Common".
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {
             'inline_formatting': True,
             'inline_formatting_absorb_punctuation': True,
@@ -353,7 +353,7 @@ class TextPostprocessTests(unittest.TestCase):
 
     def test_inline_formatting_replacement_is_literal(self):
         # A replacement containing regex-special chars must be inserted literally.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {
             'inline_formatting': True,
             'inline_formatting_replacements': [{'phrase': 'backref', 'replacement': r'\1\g<0>'}],
@@ -361,14 +361,14 @@ class TextPostprocessTests(unittest.TestCase):
         self.assertEqual(postprocess("x backref y", cfg), r"x \1\g<0> y")
 
     def test_ollama_polish_handles_curly_braces_in_text(self):
-        from whisper_key.text_postprocess import _ollama_polish
+        from syllune.text_postprocess import _ollama_polish
         cfg = {'enabled': True, 'endpoint': 'http://127.0.0.1:0', 'timeout': 0.1,
                'prompt': 'Polish:\n\n{text}'}
         result = _ollama_polish("config = {a: 1, b: 2}", cfg)
         self.assertEqual(result, '')
 
     def test_ollama_polish_handles_curly_braces_in_prompt(self):
-        from whisper_key.text_postprocess import _ollama_polish
+        from syllune.text_postprocess import _ollama_polish
         cfg = {'enabled': True, 'endpoint': 'http://127.0.0.1:0', 'timeout': 0.1,
                'prompt': 'Format: {format_var} not a placeholder. {text}'}
         result = _ollama_polish("hi", cfg)
@@ -376,29 +376,29 @@ class TextPostprocessTests(unittest.TestCase):
 
     # --- Post-transcription replacements (correction-learning backing store) ---
     def test_replacement_literal_whole_word(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'replacements': [{'from': 'see translate two', 'to': 'CTranslate2'}]}
         self.assertEqual(postprocess("we use see translate two here", cfg),
                          "we use CTranslate2 here")
 
     def test_replacement_whole_word_does_not_match_substring(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'replacements': [{'from': 'cat', 'to': 'dog'}]}
         self.assertEqual(postprocess("the category cat", cfg), "the category dog")
 
     def test_replacement_case_insensitive_by_default(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'replacements': [{'from': 'my sequel', 'to': 'MySQL'}]}
         self.assertEqual(postprocess("I love My Sequel", cfg), "I love MySQL")
 
     def test_replacement_to_text_is_literal(self):
         # Replacement text with regex-special chars is inserted verbatim.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'replacements': [{'from': 'foo', 'to': r'\1$&'}]}
         self.assertEqual(postprocess("a foo b", cfg), r"a \1$& b")
 
     def test_replacement_invalid_regex_is_skipped(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'replacements': [{'from': '(unclosed', 'to': 'x', 'regex': True}]}
         # Must not raise; text passes through unchanged.
         self.assertEqual(postprocess("hello (unclosed world", cfg),
@@ -406,7 +406,7 @@ class TextPostprocessTests(unittest.TestCase):
 
     def test_replacement_matches_punctuation_edged_terms(self):
         # Regression: \b…\b silently dropped C++ / C# / .NET (non-word edges).
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'replacements': [
             {'from': 'C++', 'to': 'CPP'},
             {'from': '.NET', 'to': 'dotnet'},
@@ -415,68 +415,68 @@ class TextPostprocessTests(unittest.TestCase):
                          "I love CPP and dotnet here")
 
     def test_replacement_whole_word_still_holds_for_normal_terms(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'replacements': [{'from': 'cat', 'to': 'dog'}]}
         self.assertEqual(postprocess("category cat scatter", cfg),
                          "category dog scatter")
 
     # --- Deterministic smart formatting ---
     def test_smart_formatting_times(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'smart_formatting': {'times': True}}
         self.assertEqual(postprocess("meet at 3 p.m. sharp", cfg), "meet at 3 PM sharp")
         self.assertEqual(postprocess("call at 3:30pm", cfg), "call at 3:30 PM")
 
     def test_smart_formatting_times_does_not_touch_words(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'smart_formatting': {'times': True}}
         self.assertEqual(postprocess("spam and jam", cfg), "spam and jam")
 
     def test_smart_formatting_times_ignores_digit_suffixed_token(self):
         # Regression: "pm2.5" must not be mangled into a time.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'smart_formatting': {'times': True}}
         self.assertEqual(postprocess("pm2.5 was high at 3 pm2 station", cfg),
                          "pm2.5 was high at 3 pm2 station")
 
     def test_smart_formatting_email(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'smart_formatting': {'emails': True}}
         self.assertEqual(postprocess("email john at example dot com please", cfg),
                          "email john@example.com please")
 
     def test_smart_formatting_email_ignores_plain_prose(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'smart_formatting': {'emails': True}}
         self.assertEqual(postprocess("let us meet at noon", cfg), "let us meet at noon")
 
     def test_smart_formatting_url(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'smart_formatting': {'urls': True}}
         self.assertEqual(postprocess("go to example dot com now", cfg),
                          "go to example.com now")
 
     def test_smart_formatting_off_by_default(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         # No smart_formatting key → spoken forms left untouched.
         self.assertEqual(postprocess("john at example dot com", {'inline_formatting': False}),
                          "john at example dot com")
 
     # --- Voice editing ("scratch that") ---
     def test_voice_editing_scratch_that(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'voice_editing': True}
         self.assertEqual(postprocess("book the flight. scratch that cancel it", cfg),
                          "book the flight. cancel it")
 
     def test_voice_editing_delete_and_strike_variants(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'voice_editing': True}
         self.assertEqual(postprocess("hello world delete that", cfg), "")  # nothing survives
         self.assertEqual(postprocess("first. junk here strike that", cfg), "first.")
 
     def test_voice_editing_off_leaves_phrase(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess("please scratch that itch", {'voice_editing': False}),
                          "please scratch that itch")
 
@@ -484,7 +484,7 @@ class TextPostprocessTests(unittest.TestCase):
         # A hand-edited user_settings.yaml can put a scalar where a mapping/list
         # belongs. That's a config mistake, but it must never take down the
         # transcription pipeline — degrade to "feature off" instead.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         for bad in (
             {'smart_formatting': 'not-a-dict'},
             {'smart_formatting': True},
@@ -503,7 +503,7 @@ class TextPostprocessTests(unittest.TestCase):
         # this budget is ~100x the measured time, so it only fires on a genuine
         # complexity regression, not on slow CI hardware.
         import time
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         text = "comma " * 3000 + "scratch that " * 200 + "word " * 3000
         cfg = {
             'inline_formatting': True,
@@ -521,7 +521,7 @@ class TextPostprocessTests(unittest.TestCase):
     def test_absorb_equivalence_on_representative_inputs(self):
         # The absorb pass was rewritten from a regex to find-then-expand; these
         # pin the exact behaviour that rewrite had to preserve.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'inline_formatting': True, 'inline_formatting_absorb_punctuation': True,
                'inline_formatting_replacements': [{'phrase': 'comma', 'replacement': ', '},
                                                   {'phrase': 'arrow', 'replacement': ' -> '}]}
@@ -536,7 +536,7 @@ class TextPostprocessTests(unittest.TestCase):
     def test_voice_editing_preserves_line_break_after_command(self):
         # Regression: the trailing class must not eat the newline separating the
         # scratched clause from the next line.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'voice_editing': True}
         self.assertEqual(postprocess("alpha. beta scratch that\ngamma", cfg),
                          "alpha.\ngamma")
@@ -545,7 +545,7 @@ class TextPostprocessTests(unittest.TestCase):
 class AppRulesShapeTests(unittest.TestCase):
     def test_defaults_yaml_is_valid(self):
         from ruamel.yaml import YAML
-        path = ROOT / "src" / "whisper_key" / "app_rules.defaults.yaml"
+        path = ROOT / "src" / "syllune" / "app_rules.defaults.yaml"
         self.assertTrue(path.exists())
         with open(path, encoding="utf-8") as f:
             data = YAML().load(f)
@@ -557,7 +557,7 @@ class AppRulesShapeTests(unittest.TestCase):
 
 class AppRulesFormattingTests(unittest.TestCase):
     def test_formatting_overrides_extracts_only_format_keys(self):
-        from whisper_key.app_rules import formatting_overrides
+        from syllune.app_rules import formatting_overrides
         rule = {
             'match': ['code.exe'],
             'auto_paste': False,          # delivery key, not a formatting key
@@ -570,13 +570,13 @@ class AppRulesFormattingTests(unittest.TestCase):
         )
 
     def test_formatting_overrides_empty_and_none(self):
-        from whisper_key.app_rules import formatting_overrides
+        from syllune.app_rules import formatting_overrides
         self.assertEqual(formatting_overrides(None), {})
         self.assertEqual(formatting_overrides({'match': ['x'], 'auto_send': True}), {})
 
     def test_merge_overrides_global_postprocess(self):
         # Simulate the pipeline merge: rule formatting overrides global config.
-        from whisper_key.app_rules import formatting_overrides
+        from syllune.app_rules import formatting_overrides
         global_cfg = {'capitalize_first': True, 'ensure_punctuation': True, 'inline_formatting': True}
         rule = {'capitalize_first': False, 'ensure_punctuation': False}
         merged = {**global_cfg, **formatting_overrides(rule)}
@@ -588,7 +588,7 @@ class AppRulesFormattingTests(unittest.TestCase):
 class TransformsShapeTests(unittest.TestCase):
     def test_defaults_yaml_is_valid(self):
         from ruamel.yaml import YAML
-        path = ROOT / "src" / "whisper_key" / "transforms.defaults.yaml"
+        path = ROOT / "src" / "syllune" / "transforms.defaults.yaml"
         self.assertTrue(path.exists())
         with open(path, encoding="utf-8") as f:
             data = YAML().load(f)
@@ -603,7 +603,7 @@ class TransformsShapeTests(unittest.TestCase):
         # and a test has no business touching a real install.
         import tempfile
         import unittest.mock as mock
-        import whisper_key.transforms as tr
+        import syllune.transforms as tr
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(tr, 'get_user_app_data_path', return_value=tmp):
                 manager = tr.TransformsManager()
@@ -615,7 +615,7 @@ class TransformsShapeTests(unittest.TestCase):
 class StreakComputationTests(unittest.TestCase):
     def test_streak_basic(self):
         import datetime
-        from whisper_key.stats import _compute_streaks
+        from syllune.stats import _compute_streaks
         today = datetime.date(2026, 5, 18)
         active = {
             '2026-05-18', '2026-05-17', '2026-05-16',
@@ -627,7 +627,7 @@ class StreakComputationTests(unittest.TestCase):
 
     def test_streak_breaks_yesterday(self):
         import datetime
-        from whisper_key.stats import _compute_streaks
+        from syllune.stats import _compute_streaks
         today = datetime.date(2026, 5, 18)
         active = {'2026-05-10'}
         current, longest = _compute_streaks(active, today)
@@ -637,13 +637,13 @@ class StreakComputationTests(unittest.TestCase):
 
 class MinutesSavedTests(unittest.TestCase):
     def test_uses_given_typing_speed(self):
-        from whisper_key.stats import _minutes_saved
+        from syllune.stats import _minutes_saved
         # 600 words: 15 min at 40 wpm, 7.5 min at 80 wpm, minus 1 min spoken.
         self.assertEqual(_minutes_saved(600, 60, 40), 14.0)
         self.assertEqual(_minutes_saved(600, 60, 80), 6.5)
 
     def test_never_negative(self):
-        from whisper_key.stats import _minutes_saved
+        from syllune.stats import _minutes_saved
         self.assertEqual(_minutes_saved(10, 600, 40), 0.0)
 
     def test_out_of_range_typing_speed_falls_back_to_default(self):
@@ -653,8 +653,8 @@ class MinutesSavedTests(unittest.TestCase):
         # config_manager imports the platform package, whose OS backend
         # (pywin32 / PIL) the lean CI env doesn't install.
         reimport_under(self, fake_platform_modules())
-        from whisper_key.config_manager import validate_config
-        with open(ROOT / "src" / "whisper_key" / "config.defaults.yaml", encoding="utf-8") as f:
+        from syllune.config_manager import validate_config
+        with open(ROOT / "src" / "syllune" / "config.defaults.yaml", encoding="utf-8") as f:
             defaults = YAML().load(f)
         for bad in (0, -5, 'fast', 1000):
             config = copy.deepcopy(defaults)
@@ -666,7 +666,7 @@ class MinutesSavedTests(unittest.TestCase):
 class ProfilesShapeTests(unittest.TestCase):
     def test_defaults_yaml_is_valid(self):
         from ruamel.yaml import YAML
-        path = ROOT / "src" / "whisper_key" / "profiles.defaults.yaml"
+        path = ROOT / "src" / "syllune" / "profiles.defaults.yaml"
         self.assertTrue(path.exists())
         with open(path, encoding="utf-8") as f:
             data = YAML().load(f)
@@ -676,12 +676,12 @@ class ProfilesShapeTests(unittest.TestCase):
 
 class UtilsTests(unittest.TestCase):
     def test_resolve_asset_path_relative(self):
-        from whisper_key.utils import resolve_asset_path
+        from syllune.utils import resolve_asset_path
         result = resolve_asset_path("config.defaults.yaml")
         self.assertTrue(result.endswith("config.defaults.yaml"))
 
     def test_resolve_asset_path_absolute_passthrough(self):
-        from whisper_key.utils import resolve_asset_path
+        from syllune.utils import resolve_asset_path
         absolute = os.path.abspath(__file__)
         self.assertEqual(resolve_asset_path(absolute), absolute)
 
@@ -691,10 +691,10 @@ class NoiseSuppresionTests(unittest.TestCase):
         import sys
         import unittest.mock as mock
         import numpy as np
-        sys.modules.pop('whisper_key.noise_suppression', None)
+        sys.modules.pop('syllune.noise_suppression', None)
         import importlib
         with mock.patch.dict(sys.modules, {'noisereduce': None}):
-            import whisper_key.noise_suppression as ns_mod
+            import syllune.noise_suppression as ns_mod
             importlib.reload(ns_mod)
             audio = np.zeros(16000, dtype=np.float32)
             result = ns_mod.apply_noise_reduction(audio, 16000, 0.75)
@@ -702,7 +702,7 @@ class NoiseSuppresionTests(unittest.TestCase):
 
     def test_config_in_defaults(self):
         from ruamel.yaml import YAML
-        path = ROOT / "src" / "whisper_key" / "config.defaults.yaml"
+        path = ROOT / "src" / "syllune" / "config.defaults.yaml"
         with open(path, encoding="utf-8") as f:
             cfg = YAML().load(f)
         ns = cfg["audio"]["noise_suppression"]
@@ -712,21 +712,21 @@ class NoiseSuppresionTests(unittest.TestCase):
 
 class UpdateCheckTests(unittest.TestCase):
     def test_is_newer_basic(self):
-        from whisper_key.update_check import _is_newer
+        from syllune.update_check import _is_newer
         self.assertTrue(_is_newer("1.0.0", "0.9.0"))
         self.assertFalse(_is_newer("0.9.0", "1.0.0"))
         self.assertFalse(_is_newer("0.9.0", "0.9.0"))
 
     def test_no_network_when_disabled(self):
         import unittest.mock as mock
-        from whisper_key.update_check import maybe_check_for_update
-        with mock.patch('whisper_key.update_check._check_in_background') as m:
+        from syllune.update_check import maybe_check_for_update
+        with mock.patch('syllune.update_check._check_in_background') as m:
             maybe_check_for_update(lambda _: None, {'enabled': False})
             m.assert_not_called()
 
     def test_update_check_in_config_defaults(self):
         from ruamel.yaml import YAML
-        path = ROOT / "src" / "whisper_key" / "config.defaults.yaml"
+        path = ROOT / "src" / "syllune" / "config.defaults.yaml"
         with open(path, encoding="utf-8") as f:
             cfg = YAML().load(f)
         self.assertIn("update_check", cfg)
@@ -737,9 +737,9 @@ class TranscriptLogTests(unittest.TestCase):
     def test_record_and_load(self):
         import tempfile
         import unittest.mock as mock
-        from whisper_key import transcript_log
+        from syllune import transcript_log
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch('whisper_key.transcript_log.get_user_app_data_path', return_value=tmpdir):
+            with mock.patch('syllune.transcript_log.get_user_app_data_path', return_value=tmpdir):
                 transcript_log.record_transcript("Hello world", app="test.exe", duration_s=1.5)
                 entries = transcript_log.load_transcripts()
         self.assertEqual(len(entries), 1)
@@ -749,9 +749,9 @@ class TranscriptLogTests(unittest.TestCase):
     def test_empty_text_not_logged(self):
         import tempfile
         import unittest.mock as mock
-        from whisper_key import transcript_log
+        from syllune import transcript_log
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch('whisper_key.transcript_log.get_user_app_data_path', return_value=tmpdir):
+            with mock.patch('syllune.transcript_log.get_user_app_data_path', return_value=tmpdir):
                 transcript_log.record_transcript("", app="test.exe")
                 entries = transcript_log.load_transcripts()
         self.assertEqual(len(entries), 0)
@@ -759,14 +759,14 @@ class TranscriptLogTests(unittest.TestCase):
 
 class SettingsUiModuleTests(unittest.TestCase):
     def test_module_importable(self):
-        from whisper_key import settings_ui
+        from syllune import settings_ui
         self.assertTrue(hasattr(settings_ui, 'run_settings_window'))
 
 
 class ModelTransferTests(unittest.TestCase):
     # Offline model transfer for locked-down networks where huggingface.co is
     # blocked. These use a stub model folder so they never need a real download.
-    def _stub_model(self, root, name="whisper-local-model-base"):
+    def _stub_model(self, root, name="syllune-model-base"):
         from pathlib import Path
         folder = Path(root) / name
         folder.mkdir(parents=True)
@@ -782,7 +782,7 @@ class ModelTransferTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import model_transfer
+        from syllune import model_transfer
         # export_model pulls ModelRegistry -> faster_whisper, absent in lean CI.
         try:
             import faster_whisper  # noqa: F401
@@ -792,12 +792,12 @@ class ModelTransferTests(unittest.TestCase):
             dest = Path(root) / "transfer.v2"
             snapshot = self._stub_model(root, name="snap")
             with mock.patch.object(model_transfer, '_find_cached_snapshot', return_value=snapshot):
-                with mock.patch('whisper_key.config_manager.ConfigManager') as CM:
+                with mock.patch('syllune.config_manager.ConfigManager') as CM:
                     CM.return_value.get_whisper_config.return_value = {'model': 'base', 'models': {}}
                     rc = model_transfer.export_model(str(dest))
             # Assert INSIDE the context — the temp tree is gone once it exits.
             self.assertEqual(rc, 0)
-            self.assertTrue((dest / "whisper-local-model-base" / "model.bin").exists(),
+            self.assertTrue((dest / "syllune-model-base" / "model.bin").exists(),
                             "export must land inside the dotted destination, not a truncated one")
             self.assertFalse((Path(root) / "transfer").exists(),
                              "must not create a truncated path")
@@ -810,7 +810,7 @@ class ModelTransferTests(unittest.TestCase):
         import io
         import contextlib
         from pathlib import Path
-        from whisper_key import model_transfer
+        from syllune import model_transfer
         if sys.platform != 'win32':
             self.skipTest("drive-letter validation is Windows-only")
         # Find a drive letter that genuinely doesn't exist on this machine.
@@ -827,14 +827,14 @@ class ModelTransferTests(unittest.TestCase):
 
     def test_export_default_destination_is_usable(self):
         from pathlib import Path
-        from whisper_key import model_transfer
+        from syllune import model_transfer
         default = model_transfer._default_export_dir()
         self.assertTrue(Path(default).is_dir(), "default export dir must exist")
         self.assertEqual(model_transfer._validate_destination(Path(default)), "")
 
     def test_import_rejects_non_model_folder(self):
         import tempfile
-        from whisper_key import model_transfer
+        from syllune import model_transfer
         with tempfile.TemporaryDirectory() as d:
             self.assertEqual(model_transfer.import_model(d), 1)  # empty dir
             self.assertEqual(model_transfer.import_model(d + "/nope"), 1)  # missing
@@ -844,7 +844,7 @@ class ModelTransferTests(unittest.TestCase):
         import unittest.mock as mock
         from pathlib import Path
         from ruamel.yaml import YAML
-        from whisper_key import model_transfer
+        from syllune import model_transfer
         with tempfile.TemporaryDirectory() as src_root, tempfile.TemporaryDirectory() as appdata:
             bundle = self._stub_model(src_root)
             with mock.patch.object(model_transfer, 'get_user_app_data_path', return_value=appdata):
@@ -865,7 +865,7 @@ class ModelTransferTests(unittest.TestCase):
         import unittest.mock as mock
         from pathlib import Path
         from ruamel.yaml import YAML
-        from whisper_key import model_transfer
+        from syllune import model_transfer
         with tempfile.TemporaryDirectory() as src_root, tempfile.TemporaryDirectory() as appdata:
             bundle = self._stub_model(src_root)
             with mock.patch.object(model_transfer, 'get_user_app_data_path', return_value=appdata):
@@ -881,7 +881,7 @@ class ModelTransferTests(unittest.TestCase):
         # app never tries to reach huggingface.co for it.
         import tempfile
         try:
-            from whisper_key.model_registry import ModelRegistry
+            from syllune.model_registry import ModelRegistry
         except Exception:
             self.skipTest("model_registry not importable (faster_whisper absent)")
         with tempfile.TemporaryDirectory() as d:
@@ -898,7 +898,7 @@ class ModelTransferTests(unittest.TestCase):
         import unittest.mock as mock
         from pathlib import Path
         from ruamel.yaml import YAML
-        from whisper_key import model_transfer
+        from syllune import model_transfer
         with tempfile.TemporaryDirectory() as src_root, tempfile.TemporaryDirectory() as appdata:
             settings = Path(appdata) / "user_settings.yaml"
             settings.write_text(
@@ -927,7 +927,7 @@ class SystemAudioTests(unittest.TestCase):
         saved = sys.modules.get('soundcard')
         sys.modules['soundcard'] = None
         try:
-            from whisper_key import system_audio
+            from syllune import system_audio
             self.assertFalse(system_audio.is_available())
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
@@ -969,7 +969,7 @@ class SystemAudioTests(unittest.TestCase):
         fake.get_microphone = lambda id, include_loopback=False: _Mic()
         sys.modules['soundcard'] = fake
         try:
-            from whisper_key import system_audio
+            from syllune import system_audio
             out = system_audio.capture_loopback(1, samplerate=16000)
             self.assertIsNotNone(out)
             self.assertEqual(out.ndim, 1)              # collapsed to mono
@@ -983,7 +983,7 @@ class ModelDownloadHintTests(unittest.TestCase):
     # First-run UX: the download message names an approximate size per model.
     def test_size_hint_for_known_models(self):
         try:
-            from whisper_key.whisper_engine import _model_size_hint
+            from syllune.whisper_engine import _model_size_hint
         except Exception:
             self.skipTest("whisper_engine not importable (faster_whisper absent)")
         self.assertEqual(_model_size_hint('base'), '~141 MB')
@@ -1001,7 +1001,7 @@ class InstanceManagerNoConsoleTests(unittest.TestCase):
         # instance_manager pulls `.platform`, which eagerly imports the OS backend
         # (win32api / AppKit) — absent in the lean CI env, so skip there.
         try:
-            from whisper_key import instance_manager
+            from syllune import instance_manager
         except Exception:
             self.skipTest("instance_manager not importable on this platform")
         buf = io.StringIO()
@@ -1019,7 +1019,7 @@ class CorrectionsTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         d = tempfile.mkdtemp()
-        from whisper_key import corrections as cmod
+        from syllune import corrections as cmod
         patcher = mock.patch.object(cmod, 'get_user_app_data_path', return_value=d)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -1067,14 +1067,14 @@ class CorrectionsTests(unittest.TestCase):
         # End-to-end: what corrections.py writes must be consumable by postprocess.
         cmod, _ = self._with_temp_settings()
         cmod.add_replacement('my sequel', 'MySQL')
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'replacements': cmod.list_replacements()}
         self.assertEqual(postprocess('I use my sequel daily', cfg), 'I use MySQL daily')
 
 
 class HotwordSuggestTests(unittest.TestCase):
     def test_suggest_picks_frequent_proper_nouns(self):
-        from whisper_key.dictionary import suggest_hotwords
+        from syllune.dictionary import suggest_hotwords
         texts = [
             "We deployed Kubernetes today.",
             "The Kubernetes cluster is fine. Kubernetes again.",
@@ -1085,13 +1085,13 @@ class HotwordSuggestTests(unittest.TestCase):
         self.assertEqual(got['Kubernetes'], 3)  # sentence-initial one not counted
 
     def test_suggest_excludes_known_hotwords(self):
-        from whisper_key.dictionary import suggest_hotwords
+        from syllune.dictionary import suggest_hotwords
         texts = ["Use Redis now.", "Redis is great with Redis.", "More Redis here."]
         got = dict(suggest_hotwords(texts, known={'redis'}, min_count=2))
         self.assertNotIn('Redis', got)
 
     def test_suggest_ignores_plain_sentence_starts(self):
-        from whisper_key.dictionary import suggest_hotwords
+        from syllune.dictionary import suggest_hotwords
         texts = ["Today was good.", "Today is better.", "Today we ship."]
         # "Today" only ever appears sentence-initial → not a suggestion.
         self.assertEqual(suggest_hotwords(texts, min_count=2), [])
@@ -1104,7 +1104,7 @@ class OnboardingBannerTests(unittest.TestCase):
         import io
         import contextlib
         import unittest.mock as mock
-        from whisper_key import onboarding_tutorial
+        from syllune import onboarding_tutorial
         seen = {}
 
         def fake_notify(msg):
@@ -1139,7 +1139,7 @@ class PostprocessHotReloadTests(unittest.TestCase):
         # config_manager pulls `.platform`, which eagerly imports the OS-specific
         # backend (win32api / AppKit) — absent in the lean CI env, so skip there.
         try:
-            from whisper_key import config_manager as cm_mod
+            from syllune import config_manager as cm_mod
         except Exception:
             self.skipTest("config_manager not importable on this platform")
         with tempfile.TemporaryDirectory() as d:
@@ -1159,25 +1159,25 @@ class SettingsResetTests(unittest.TestCase):
     def test_reset_preserves_hotwords(self):
         import tempfile, os
         from ruamel.yaml import YAML
-        from whisper_key.settings_ui import reset_settings_preserving_hotwords
+        from syllune.settings_ui import reset_settings_preserving_hotwords
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, 'user_settings.yaml')
             with open(path, 'w', encoding='utf-8') as f:
-                YAML().dump({'whisper': {'model': 'small', 'hotwords': ['Kubernetes', 'drajb']},
+                YAML().dump({'whisper': {'model': 'small', 'hotwords': ['Kubernetes', 'Syllune']},
                              'clipboard': {'auto_paste': False}}, f)
             preserved = reset_settings_preserving_hotwords(path)
-            self.assertEqual(preserved, ['Kubernetes', 'drajb'])
+            self.assertEqual(preserved, ['Kubernetes', 'Syllune'])
             with open(path, encoding='utf-8') as f:
                 after = YAML().load(f)
             # hotwords kept, everything else gone (back to defaults)
-            self.assertEqual(list(after['whisper']['hotwords']), ['Kubernetes', 'drajb'])
+            self.assertEqual(list(after['whisper']['hotwords']), ['Kubernetes', 'Syllune'])
             self.assertNotIn('clipboard', after)
             self.assertNotIn('model', after['whisper'])
 
     def test_reset_with_no_hotwords_removes_file(self):
         import tempfile, os
         from ruamel.yaml import YAML
-        from whisper_key.settings_ui import reset_settings_preserving_hotwords
+        from syllune.settings_ui import reset_settings_preserving_hotwords
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, 'user_settings.yaml')
             with open(path, 'w', encoding='utf-8') as f:
@@ -1188,7 +1188,7 @@ class SettingsResetTests(unittest.TestCase):
 
 class HistoryWindowModuleTests(unittest.TestCase):
     def test_module_importable(self):
-        from whisper_key import history_window
+        from syllune import history_window
         self.assertTrue(hasattr(history_window, 'show_history'))
 
 
@@ -1217,13 +1217,13 @@ class PyprojectOptionalDepsTests(unittest.TestCase):
 
 class SelftestModuleTests(unittest.TestCase):
     def test_module_importable(self):
-        from whisper_key import selftest
+        from syllune import selftest
         self.assertTrue(hasattr(selftest, 'run_selftest'))
 
     def test_report_helper(self):
         import io
         import sys
-        from whisper_key.selftest import _report
+        from syllune.selftest import _report
         failures = []
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -1240,38 +1240,38 @@ class FirstRunTests(unittest.TestCase):
     def test_flag_file_lifecycle(self):
         import tempfile
         import unittest.mock as mock
-        from whisper_key import first_run
+        from syllune import first_run
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            with mock.patch('whisper_key.first_run.get_user_app_data_path', return_value=tmpdir):
+            with mock.patch('syllune.first_run.get_user_app_data_path', return_value=tmpdir):
                 self.assertTrue(first_run.is_first_run())
                 first_run.mark_first_run_complete()
                 self.assertFalse(first_run.is_first_run())
 
     def test_show_welcome_module_importable(self):
-        from whisper_key import first_run
+        from syllune import first_run
         self.assertTrue(hasattr(first_run, 'show_welcome_window'))
 
 
 class CheatSheetTests(unittest.TestCase):
     def test_module_importable(self):
-        from whisper_key import cheat_sheet
+        from syllune import cheat_sheet
         self.assertTrue(hasattr(cheat_sheet, 'show_cheat_sheet'))
 
 
 class BundleLogsTests(unittest.TestCase):
     def test_redaction_replaces_usernames(self):
-        from whisper_key.bundle_logs import _redact
-        sample = "Path: C:\\Users\\rohit\\AppData\\Roaming and email me at test@example.com"
+        from syllune.bundle_logs import _redact
+        sample = "Path: C:\\Users\\alex\\AppData\\Roaming and email me at test@example.com"
         red = _redact(sample)
-        self.assertNotIn("rohit", red.lower())
+        self.assertNotIn("alex", red.lower())
         self.assertNotIn("test@example.com", red)
         self.assertIn("<USER>", red)
         self.assertIn("<EMAIL>", red)
 
     def test_redaction_macos_linux_paths(self):
-        from whisper_key.bundle_logs import _redact
-        self.assertIn("<USER>", _redact("/Users/alice/.whisperkey/"))
+        from syllune.bundle_logs import _redact
+        self.assertIn("<USER>", _redact("/Users/alice/.syllune/"))
         self.assertIn("<USER>", _redact("/home/bob/log.txt"))
 
     def test_bundle_creates_zip(self):
@@ -1280,7 +1280,7 @@ class BundleLogsTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         import zipfile
-        from whisper_key import bundle_logs
+        from syllune import bundle_logs
 
         with tempfile.TemporaryDirectory() as appdata:
             with tempfile.TemporaryDirectory() as out:
@@ -1288,8 +1288,8 @@ class BundleLogsTests(unittest.TestCase):
                 old_stdout = sys.stdout
                 sys.stdout = io.StringIO()
                 try:
-                    with mock.patch('whisper_key.bundle_logs.get_user_app_data_path', return_value=appdata), \
-                         mock.patch('whisper_key.bundle_logs._capture_doctor', return_value='[doctor mocked]'):
+                    with mock.patch('syllune.bundle_logs.get_user_app_data_path', return_value=appdata), \
+                         mock.patch('syllune.bundle_logs._capture_doctor', return_value='[doctor mocked]'):
                         rc = bundle_logs.bundle_logs(output)
                 finally:
                     sys.stdout = old_stdout
@@ -1302,7 +1302,7 @@ class BundleLogsTests(unittest.TestCase):
 
 class LocalServerTests(unittest.TestCase):
     def test_module_importable(self):
-        from whisper_key import local_server
+        from syllune import local_server
         self.assertTrue(hasattr(local_server, 'run_server'))
         self.assertEqual(local_server.DEFAULT_PORT, 7777)
 
@@ -1310,7 +1310,7 @@ class LocalServerTests(unittest.TestCase):
         import io
         import wave
         import numpy as np
-        from whisper_key.local_server import _decode_wav_fallback
+        from syllune.local_server import _decode_wav_fallback
 
         with io.BytesIO() as buf:
             with wave.open(buf, 'wb') as wf:
@@ -1329,15 +1329,15 @@ class LocalServerTests(unittest.TestCase):
 
 class MainCliFlagsTests(unittest.TestCase):
     def test_main_registers_new_flags(self):
-        main_src = (ROOT / "src" / "whisper_key" / "main.py").read_text(encoding="utf-8")
+        main_src = (ROOT / "src" / "syllune" / "main.py").read_text(encoding="utf-8")
         for flag in ('--selftest', '--cheat-sheet', '--bundle-logs', '--serve'):
             self.assertIn(flag, main_src, f"main.py should register {flag}")
 
 
-class TroubleshootingDocTests(unittest.TestCase):
+class UserDocTests(unittest.TestCase):
     def test_docs_exist(self):
-        self.assertTrue((ROOT / "docs" / "troubleshooting.md").exists())
-        self.assertTrue((ROOT / "docs" / "faq.md").exists())
+        for name in ('syllune-install.md', 'syllune-privacy.md', 'syllune-troubleshooting.md'):
+            self.assertTrue((ROOT / "docs" / name).exists(), name)
 
 
 class VersionBumpTests(unittest.TestCase):
@@ -1349,13 +1349,18 @@ class VersionBumpTests(unittest.TestCase):
         major, minor = version.split('.')[:2]
         self.assertGreaterEqual((int(major), int(minor)), (0, 10))
 
-    def test_citation_matches_pyproject(self):
+    # The engine, the window and the installer each carry the version; a
+    # release with two different numbers would confuse the update check.
+    def test_every_version_matches_pyproject(self):
+        import json
         import tomllib
+        from syllune import brand
         with open(ROOT / "pyproject.toml", "rb") as f:
             pyproject_version = tomllib.load(f)["project"]["version"]
-        citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
-        self.assertIn(f"version: {pyproject_version}", citation,
-                      "CITATION.cff version must match pyproject.toml")
+        self.assertEqual(brand.VERSION, pyproject_version)
+        for rel in ("overlay/brand.json", "overlay/package.json"):
+            data = json.loads((ROOT / rel).read_text(encoding="utf-8"))
+            self.assertEqual(data["version"], pyproject_version, rel)
 
 
 class _FakeHandler:
@@ -1383,7 +1388,7 @@ def _build_multipart(boundary: str, file_bytes: bytes) -> bytes:
 class LocalServerSecurityTests(unittest.TestCase):
     # SRV-1: binary audio ending in 0x2D ('-') must NOT be truncated.
     def test_parse_multipart_preserves_trailing_dashes(self):
-        from whisper_key.local_server import _parse_multipart
+        from syllune.local_server import _parse_multipart
         audio = b'\x00\x01\x02\x2d\x2d\x2d'  # ends in three dashes
         body = _build_multipart('BoUnDaRy123', audio)
         fields = _parse_multipart(_FakeHandler(body, 'BoUnDaRy123'))
@@ -1391,7 +1396,7 @@ class LocalServerSecurityTests(unittest.TestCase):
 
     # SRV-2: oversized Content-Length is rejected before the body is read.
     def test_oversized_content_length_rejected(self):
-        from whisper_key import local_server
+        from syllune import local_server
         huge = local_server.MAX_UPLOAD_BYTES + 1
         handler = _FakeHandler(b'x', 'B', content_length=huge)
         with self.assertRaises(ValueError):
@@ -1399,7 +1404,7 @@ class LocalServerSecurityTests(unittest.TestCase):
 
     # SEC #3: negative Content-Length must be rejected (read(-1) would drain socket).
     def test_negative_content_length_rejected(self):
-        from whisper_key import local_server
+        from syllune import local_server
         handler = _FakeHandler(b'x', 'B', content_length=-1)
         with self.assertRaises(ValueError):
             local_server._parse_multipart(handler)
@@ -1409,7 +1414,7 @@ class BundleRedactionTests(unittest.TestCase):
     # SEC #2: URL credentials + secret query params masked in ALL bundled files
     # (this is what protects doctor.txt, not just user_settings.yaml).
     def test_redact_masks_url_credentials_and_tokens(self):
-        from whisper_key.bundle_logs import _redact
+        from syllune.bundle_logs import _redact
         out = _redact("Ollama post-edit: http://user:s3cret@ollama.host:11434 reachable")
         self.assertNotIn("s3cret", out)
         self.assertIn("<REDACTED>@", out)
@@ -1419,7 +1424,7 @@ class BundleRedactionTests(unittest.TestCase):
 
     # PRIV-1: sensitive config fields are masked in user_settings.yaml.
     def test_redact_yaml_masks_sensitive_fields(self):
-        from whisper_key.bundle_logs import _redact_yaml
+        from syllune.bundle_logs import _redact_yaml
         sample = (
             "whisper:\n"
             "  hotwords: [SecretName, CodeWord]\n"
@@ -1436,7 +1441,7 @@ class BundleRedactionTests(unittest.TestCase):
         self.assertIn('<REDACTED>', out)
 
     def test_redact_yaml_masks_block_hotwords(self):
-        from whisper_key.bundle_logs import _redact_yaml
+        from syllune.bundle_logs import _redact_yaml
         sample = "whisper:\n  hotwords:\n    - Alpha\n    - Bravo\n  model: tiny\n"
         out = _redact_yaml(sample)
         self.assertNotIn('Alpha', out)
@@ -1448,13 +1453,13 @@ class VoiceCommandQuotingTests(unittest.TestCase):
     # VC-1: clipboard content is shell-quoted when expanded into a run: command.
     def test_shell_safe_quotes_clipboard(self):
         try:
-            from whisper_key.voice_commands import VoiceCommandManager
+            from syllune.voice_commands import VoiceCommandManager
         except Exception:
             self.skipTest("voice_commands not importable on this platform")
         import shlex
         import unittest.mock as mock
         vc = VoiceCommandManager.__new__(VoiceCommandManager)
-        with mock.patch('whisper_key.voice_commands.pyperclip.paste', return_value='; rm -rf ~'):
+        with mock.patch('syllune.voice_commands.pyperclip.paste', return_value='; rm -rf ~'):
             safe = vc._expand_template('echo ${clipboard}', shell_safe=True)
             raw = vc._expand_template('echo ${clipboard}', shell_safe=False)
         self.assertEqual(safe, 'echo ' + shlex.quote('; rm -rf ~'))
@@ -1463,32 +1468,32 @@ class VoiceCommandQuotingTests(unittest.TestCase):
 
 class AutostartTests(unittest.TestCase):
     def test_module_and_api(self):
-        from whisper_key import autostart
+        from syllune import autostart
         for fn in ('is_supported', 'is_enabled', 'enable', 'disable', 'toggle'):
             self.assertTrue(callable(getattr(autostart, fn, None)), f"missing {fn}")
 
     def test_is_supported_matches_platform(self):
         import sys
-        from whisper_key import autostart
+        from syllune import autostart
         self.assertEqual(autostart.is_supported(), sys.platform in ('win32', 'darwin'))
 
     def test_launch_command_nonempty(self):
-        from whisper_key import autostart
+        from syllune import autostart
         cmd = autostart._launch_command()
         self.assertIsInstance(cmd, list)
         self.assertTrue(cmd and cmd[0])
 
     def test_pyapp_autostart_uses_exe_not_bare_interpreter(self):
         # Regression for issue #2. Under pyapp, sys.executable is the private
-        # unpacked CPython, NOT whisper-local.exe. Using it put a bare interpreter
+        # unpacked CPython, NOT syllune.exe. Using it put a bare interpreter
         # in the Run key, so boot opened an interactive Python console instead of
         # the app. $PYAPP carries the real .exe path (PYAPP_PASS_LOCATION=1).
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import autostart
+        from syllune import autostart
         with tempfile.TemporaryDirectory() as d:
-            fake_exe = Path(d) / "whisper-local.exe"
+            fake_exe = Path(d) / "syllune.exe"
             fake_exe.write_text("stub", encoding="utf-8")
             unpacked_python = str(Path(d) / "python.exe")
             with mock.patch.dict(os.environ, {"PYAPP": str(fake_exe)}):
@@ -1502,31 +1507,31 @@ class AutostartTests(unittest.TestCase):
     def test_broken_bare_interpreter_detection(self):
         # The repair must fire on the broken issue-#2 value and on nothing else,
         # so it can never clobber a healthy or user-customised Run entry.
-        from whisper_key.autostart import _is_broken_bare_interpreter as broken
+        from syllune.autostart import _is_broken_bare_interpreter as broken
         # Broken: a lone interpreter, no script to run.
         self.assertTrue(broken(r"C:\pyapp\python.exe"))
         self.assertTrue(broken(r'"C:\Program Files\pyapp\python.exe"'))
         self.assertTrue(broken(r"C:\x\pythonw.exe"))
         self.assertTrue(broken(r"C:\x\python3.exe"))
         # Healthy: has arguments, or is the app executable itself.
-        self.assertFalse(broken(r"C:\x\pythonw.exe -m whisper_key.main"))
-        self.assertFalse(broken(r'"C:\Program Files\py\pythonw.exe" -m whisper_key.main'))
-        self.assertFalse(broken(r"C:\apps\whisper-local.exe"))
+        self.assertFalse(broken(r"C:\x\pythonw.exe -m syllune.main"))
+        self.assertFalse(broken(r'"C:\Program Files\py\pythonw.exe" -m syllune.main'))
+        self.assertFalse(broken(r"C:\apps\syllune.exe"))
         self.assertFalse(broken(""))
         self.assertFalse(broken("   "))
 
     def test_repair_is_noop_when_not_enabled(self):
         import unittest.mock as mock
-        from whisper_key import autostart
+        from syllune import autostart
         with mock.patch.object(autostart, '_win_is_enabled', return_value=False):
             self.assertFalse(autostart.repair_if_broken())
 
     def test_repair_rewrites_only_broken_entry(self):
         import unittest.mock as mock
-        from whisper_key import autostart
+        from syllune import autostart
         if sys.platform != 'win32':
             self.skipTest("registry repair is Windows-only")
-        good = r"C:\x\pythonw.exe -m whisper_key.main"
+        good = r"C:\x\pythonw.exe -m syllune.main"
         with mock.patch.object(autostart, '_win_is_enabled', return_value=True):
             # Healthy entry -> untouched.
             with mock.patch.object(autostart, '_win_stored_command', return_value=good):
@@ -1544,7 +1549,7 @@ class AutostartTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import autostart
+        from syllune import autostart
         if sys.platform != 'win32':
             self.skipTest("pythonw.exe selection is Windows-only")
         with tempfile.TemporaryDirectory() as d:
@@ -1556,13 +1561,13 @@ class AutostartTests(unittest.TestCase):
             with mock.patch.dict(os.environ, env, clear=True):
                 with mock.patch.object(autostart.sys, 'executable', str(py)):
                     cmd = autostart._launch_command()
-        self.assertEqual(cmd, [str(pyw), "-m", "whisper_key.main"])
+        self.assertEqual(cmd, [str(pyw), "-m", "syllune.main"])
 
     def test_missing_pythonw_falls_back_without_crashing(self):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import autostart
+        from syllune import autostart
         if sys.platform != 'win32':
             self.skipTest("pythonw.exe selection is Windows-only")
         with tempfile.TemporaryDirectory() as d:
@@ -1574,40 +1579,40 @@ class AutostartTests(unittest.TestCase):
                     with mock.patch.object(autostart.sys, '_base_executable', str(py)):
                         cmd = autostart._launch_command()
         # Falls back to console python, but still passes -m so the APP runs.
-        self.assertEqual(cmd, [str(py), "-m", "whisper_key.main"])
+        self.assertEqual(cmd, [str(py), "-m", "syllune.main"])
 
     def test_macos_plist_roundtrip(self):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import autostart
+        from syllune import autostart
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / 'agent.plist'
-            with mock.patch('whisper_key.autostart._mac_plist_path', return_value=p), \
-                 mock.patch('whisper_key.autostart._mac_launcher_dir', return_value=Path(d) / 'support'), \
-                 mock.patch('whisper_key.autostart._mac_build_launcher', return_value=None):
+            with mock.patch('syllune.autostart._mac_plist_path', return_value=p), \
+                 mock.patch('syllune.autostart._mac_launcher_dir', return_value=Path(d) / 'support'), \
+                 mock.patch('syllune.autostart._mac_build_launcher', return_value=None):
                 self.assertFalse(autostart._mac_is_enabled())
                 autostart._mac_enable()
                 self.assertTrue(autostart._mac_is_enabled())
                 content = p.read_text(encoding='utf-8')
                 self.assertIn('RunAtLoad', content)
-                self.assertIn('com.drajb.whisper-local', content)
+                self.assertIn('com.loathious.syllune', content)
                 autostart._mac_disable()
                 self.assertFalse(autostart._mac_is_enabled())
 
     def test_main_registers_autostart_flags(self):
-        main_src = (ROOT / "src" / "whisper_key" / "main.py").read_text(encoding="utf-8")
+        main_src = (ROOT / "src" / "syllune" / "main.py").read_text(encoding="utf-8")
         self.assertIn('--enable-autostart', main_src)
         self.assertIn('--disable-autostart', main_src)
 
     # --- #19: macOS checked login-time permissions against bare Python ---
-    # A throwaway folder in place of ~/Library/Application Support/Whisper Local.
+    # A throwaway folder in place of ~/Library/Application Support/Syllune.
     def _launcher_dir(self):
         import tempfile
         from pathlib import Path
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        return Path(folder.name) / 'Whisper Local'
+        return Path(folder.name) / 'Syllune'
 
     # Stands in for xcode-select, xcrun and codesign. Records each tool it runs;
     # "clang" writes a fake executable; `fail` names a tool that fails.
@@ -1633,9 +1638,9 @@ class AutostartTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import autostart
-        launcher = Path('/Users/me/Library/Application Support/Whisper Local/'
-                        'Whisper Local.app/Contents/MacOS/Whisper Local')
+        from syllune import autostart
+        launcher = Path('/Users/me/Library/Application Support/Syllune/'
+                        'Syllune.app/Contents/MacOS/Syllune')
         with tempfile.TemporaryDirectory() as d:
             plist = Path(d) / 'agent.plist'
             with mock.patch.object(autostart, '_mac_plist_path', return_value=plist):
@@ -1653,18 +1658,18 @@ class AutostartTests(unittest.TestCase):
         # nothing may run after the xcode-select check fails.
         import subprocess
         import unittest.mock as mock
-        from whisper_key import autostart
+        from syllune import autostart
         missing = subprocess.CompletedProcess(['/usr/bin/xcode-select', '-p'], 2, stdout='', stderr='')
         with mock.patch.object(autostart, '_mac_launcher_dir', return_value=self._launcher_dir()), \
              mock.patch.object(autostart, '_mac_run', return_value=missing) as run:
-            self.assertIsNone(autostart._mac_build_launcher(['/usr/bin/python3', '-m', 'whisper_key.main']))
+            self.assertIsNone(autostart._mac_build_launcher(['/usr/bin/python3', '-m', 'syllune.main']))
         self.assertEqual([c.args[0][0] for c in run.call_args_list], ['/usr/bin/xcode-select'])
 
     def test_launcher_is_rebuilt_only_when_its_inputs_change(self):
         import unittest.mock as mock
-        from whisper_key import autostart
+        from syllune import autostart
         folder = self._launcher_dir()
-        command = ['/usr/bin/python3', '-m', 'whisper_key.main']
+        command = ['/usr/bin/python3', '-m', 'syllune.main']
         calls = []
         with mock.patch.object(autostart, '_mac_launcher_dir', return_value=folder), \
              mock.patch.object(autostart, '_LSREGISTER', '/usr/bin/true'), \
@@ -1676,24 +1681,24 @@ class AutostartTests(unittest.TestCase):
             self.assertEqual(autostart._mac_build_launcher(command), executable)
             self.assertEqual(calls, ['/usr/bin/codesign --verify'], 'an unchanged launcher is reused')
             calls.clear()
-            autostart._mac_build_launcher(['/opt/other/python3', '-m', 'whisper_key.main'])
+            autostart._mac_build_launcher(['/opt/other/python3', '-m', 'syllune.main'])
             self.assertIn('/usr/bin/xcrun', calls, 'a new command needs a new launcher')
 
     def test_failed_rebuild_keeps_the_working_launcher(self):
         # For example, Xcode was updated and its license not yet accepted.
         import unittest.mock as mock
-        from whisper_key import autostart
+        from syllune import autostart
         folder = self._launcher_dir()
-        working = folder / 'Whisper Local.app' / 'Contents' / 'MacOS' / 'Whisper Local'
+        working = folder / 'Syllune.app' / 'Contents' / 'MacOS' / 'Syllune'
         working.parent.mkdir(parents=True)
         working.write_bytes(b'granted launcher')
         calls = []
         toolchain = self._fake_toolchain(calls, fail='/usr/bin/xcrun', signed=False)
         with mock.patch.object(autostart, '_mac_launcher_dir', return_value=folder), \
              mock.patch.object(autostart, '_mac_run', side_effect=toolchain):
-            self.assertIsNone(autostart._mac_build_launcher(['/usr/bin/python3', '-m', 'whisper_key.main']))
+            self.assertIsNone(autostart._mac_build_launcher(['/usr/bin/python3', '-m', 'syllune.main']))
         self.assertEqual(working.read_bytes(), b'granted launcher')
-        self.assertEqual(sorted(p.name for p in folder.iterdir()), ['Whisper Local.app'],
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), ['Syllune.app'],
                          'no half-built app or temporary folder may be left behind')
 
     def test_launcher_builds_as_a_signed_app(self):
@@ -1703,19 +1708,19 @@ class AutostartTests(unittest.TestCase):
         import re
         import subprocess
         import unittest.mock as mock
-        from whisper_key import autostart
+        from syllune import autostart
         if sys.platform != 'darwin' or subprocess.run(['/usr/bin/xcode-select', '-p'],
                                                       capture_output=True).returncode:
             self.skipTest('needs macOS with the Command Line Tools')
-        command = [sys.executable, '-m', 'whisper_key.main']
+        command = [sys.executable, '-m', 'syllune.main']
         cdhashes = []
         for _ in range(2):
             folder = self._launcher_dir()
             with mock.patch.object(autostart, '_mac_launcher_dir', return_value=folder), \
                  mock.patch.object(autostart, '_LSREGISTER', '/usr/bin/true'):
                 executable = autostart._mac_build_launcher(command)
-            app = folder / 'Whisper Local.app'
-            self.assertEqual(executable, app / 'Contents' / 'MacOS' / 'Whisper Local')
+            app = folder / 'Syllune.app'
+            self.assertEqual(executable, app / 'Contents' / 'MacOS' / 'Syllune')
             verify = subprocess.run(['/usr/bin/codesign', '--verify', '--strict', str(app)],
                                     capture_output=True, text=True)
             self.assertEqual(verify.returncode, 0, verify.stderr)
@@ -1734,13 +1739,13 @@ class AutostartTests(unittest.TestCase):
 
     def test_launcher_runs_only_its_built_in_command(self):
         # A build with the Accessibility check stubbed out, since this process may
-        # not be trusted, around a stand-in for Whisper Local.
+        # not be trusted, around a stand-in for Syllune.
         import json
         import subprocess
         import tempfile
         import time
         from pathlib import Path
-        from whisper_key import autostart
+        from syllune import autostart
         if sys.platform != 'darwin' or subprocess.run(['/usr/bin/xcode-select', '-p'],
                                                       capture_output=True).returncode:
             self.skipTest('needs macOS with the Command Line Tools')
@@ -1798,7 +1803,7 @@ class AutostartTests(unittest.TestCase):
 class DefaultsTests(unittest.TestCase):
     def test_default_model_and_recording_mode(self):
         from ruamel.yaml import YAML
-        path = ROOT / "src" / "whisper_key" / "config.defaults.yaml"
+        path = ROOT / "src" / "syllune" / "config.defaults.yaml"
         with open(path, encoding="utf-8") as f:
             cfg = YAML().load(f)
         self.assertEqual(cfg["whisper"]["model"], "base")
@@ -1808,7 +1813,7 @@ class DefaultsTests(unittest.TestCase):
 
     def test_profiles_no_tiny_downgrade(self):
         from ruamel.yaml import YAML
-        path = ROOT / "src" / "whisper_key" / "profiles.defaults.yaml"
+        path = ROOT / "src" / "syllune" / "profiles.defaults.yaml"
         with open(path, encoding="utf-8") as f:
             data = YAML().load(f)
         for name, prof in data["profiles"].items():
@@ -1817,7 +1822,7 @@ class DefaultsTests(unittest.TestCase):
 
     def test_export_covers_all_user_files(self):
         # backup/restore must include every user-editable config file.
-        from whisper_key.settings_io import EXPORTABLE_FILES
+        from syllune.settings_io import EXPORTABLE_FILES
         for f in ("user_settings.yaml", "commands.yaml", "profiles.yaml",
                   "app_rules.yaml", "transforms.yaml"):
             self.assertIn(f, EXPORTABLE_FILES)
@@ -1826,7 +1831,7 @@ class DefaultsTests(unittest.TestCase):
 class ReviewFixTests(unittest.TestCase):
     # update_check must not crash on a "-dev" suffixed local version.
     def test_is_newer_handles_dev_suffix(self):
-        from whisper_key.update_check import _is_newer
+        from syllune.update_check import _is_newer
         self.assertTrue(_is_newer("0.12.0", "0.11.0-dev"))
         self.assertFalse(_is_newer("0.11.0", "0.11.0-dev"))   # same core, not newer
         self.assertFalse(_is_newer("1.2", "1.2.0"))           # padded equal
@@ -1834,7 +1839,7 @@ class ReviewFixTests(unittest.TestCase):
 
     # settings_ui._coerce must keep free-text settings as strings even when numeric-looking.
     def test_coerce_is_type_aware(self):
-        from whisper_key.settings_ui import _coerce
+        from syllune.settings_ui import _coerce
         sentinel = object()  # not a BooleanVar
         self.assertEqual(_coerce(sentinel, "2024", "whisper.initial_prompt"), "2024")
         self.assertEqual(_coerce(sentinel, "3", "postprocess.ollama.model"), "3")
@@ -1848,11 +1853,11 @@ class ReviewFixTests(unittest.TestCase):
             self.skipTest("toggle round-trip exercised via macOS plist path only")
         import tempfile, unittest.mock as mock
         from pathlib import Path
-        from whisper_key import autostart
+        from syllune import autostart
         with tempfile.TemporaryDirectory() as d:
-            with mock.patch("whisper_key.autostart._mac_plist_path", return_value=Path(d) / "a.plist"), \
-                 mock.patch("whisper_key.autostart._mac_launcher_dir", return_value=Path(d) / "support"), \
-                 mock.patch("whisper_key.autostart._mac_build_launcher", return_value=None):
+            with mock.patch("syllune.autostart._mac_plist_path", return_value=Path(d) / "a.plist"), \
+                 mock.patch("syllune.autostart._mac_launcher_dir", return_value=Path(d) / "support"), \
+                 mock.patch("syllune.autostart._mac_build_launcher", return_value=None):
                 self.assertTrue(autostart.toggle())
                 self.assertFalse(autostart.toggle())
 
@@ -1862,27 +1867,27 @@ class StreamingDeliveryDecisionTests(unittest.TestCase):
         return {'deliver_to_cursor': on}
 
     def test_off_by_default(self):
-        from whisper_key.streaming_delivery import decide_stream_delivery
+        from syllune.streaming_delivery import decide_stream_delivery
         self.assertFalse(decide_stream_delivery({}, True, True, True, None))
 
     def test_all_conditions_met(self):
-        from whisper_key.streaming_delivery import decide_stream_delivery
+        from syllune.streaming_delivery import decide_stream_delivery
         self.assertTrue(decide_stream_delivery(self._cfg(), True, True, True, None))
 
     def test_requires_streaming_available(self):
-        from whisper_key.streaming_delivery import decide_stream_delivery
+        from syllune.streaming_delivery import decide_stream_delivery
         self.assertFalse(decide_stream_delivery(self._cfg(), False, True, True, None))
 
     def test_requires_auto_paste(self):
-        from whisper_key.streaming_delivery import decide_stream_delivery
+        from syllune.streaming_delivery import decide_stream_delivery
         self.assertFalse(decide_stream_delivery(self._cfg(), True, False, True, None))
 
     def test_requires_textable_foreground(self):
-        from whisper_key.streaming_delivery import decide_stream_delivery
+        from syllune.streaming_delivery import decide_stream_delivery
         self.assertFalse(decide_stream_delivery(self._cfg(), True, True, False, None))
 
     def test_respects_app_rule_suppress_and_copyonly(self):
-        from whisper_key.streaming_delivery import decide_stream_delivery
+        from syllune.streaming_delivery import decide_stream_delivery
         self.assertFalse(decide_stream_delivery(self._cfg(), True, True, True, {'suppress': True}))
         self.assertFalse(decide_stream_delivery(self._cfg(), True, True, True, {'auto_paste': False}))
         # a rule that doesn't touch delivery is fine
@@ -1891,7 +1896,7 @@ class StreamingDeliveryDecisionTests(unittest.TestCase):
 
 class StreamingDeliveryWorkerTests(unittest.TestCase):
     def test_segments_delivered_in_order_and_recorded(self):
-        from whisper_key.streaming_delivery import StreamingDelivery
+        from syllune.streaming_delivery import StreamingDelivery
         delivered = []
         sd = StreamingDelivery(deliver_fn=delivered.append)
         sd.start()
@@ -1903,7 +1908,7 @@ class StreamingDeliveryWorkerTests(unittest.TestCase):
         self.assertTrue(sd.submitted_any)
 
     def test_blank_segments_ignored(self):
-        from whisper_key.streaming_delivery import StreamingDelivery
+        from syllune.streaming_delivery import StreamingDelivery
         delivered = []
         sd = StreamingDelivery(deliver_fn=delivered.append)
         sd.start()
@@ -1914,7 +1919,7 @@ class StreamingDeliveryWorkerTests(unittest.TestCase):
         self.assertFalse(sd.submitted_any)
 
     def test_stop_is_idempotent(self):
-        from whisper_key.streaming_delivery import StreamingDelivery
+        from syllune.streaming_delivery import StreamingDelivery
         sd = StreamingDelivery(deliver_fn=lambda s: None)
         sd.start()
         sd.submit_final("x")
@@ -1922,7 +1927,7 @@ class StreamingDeliveryWorkerTests(unittest.TestCase):
         self.assertEqual(sd.stop(), "x")  # second stop returns same, no error
 
     def test_deliver_fn_exception_does_not_crash_and_flags_failure(self):
-        from whisper_key.streaming_delivery import StreamingDelivery
+        from syllune.streaming_delivery import StreamingDelivery
         def boom(_):
             raise RuntimeError("boom")
         sd = StreamingDelivery(deliver_fn=boom)
@@ -1933,7 +1938,7 @@ class StreamingDeliveryWorkerTests(unittest.TestCase):
         self.assertTrue(sd.had_failure)
 
     def test_no_failure_flag_on_clean_delivery(self):
-        from whisper_key.streaming_delivery import StreamingDelivery
+        from syllune.streaming_delivery import StreamingDelivery
         sd = StreamingDelivery(deliver_fn=lambda s: None)
         sd.start()
         sd.submit_final("ok")
@@ -1942,7 +1947,7 @@ class StreamingDeliveryWorkerTests(unittest.TestCase):
 
     def test_submit_after_stop_is_ignored(self):
         # Closes the submit/stop race: a late segment after stop is dropped, not enqueued.
-        from whisper_key.streaming_delivery import StreamingDelivery
+        from syllune.streaming_delivery import StreamingDelivery
         delivered = []
         sd = StreamingDelivery(deliver_fn=delivered.append)
         sd.start()
@@ -1964,7 +1969,7 @@ class MergedFeatureTests(unittest.TestCase):
     def test_amd_gpu_classification(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            'wk_gpu', str(ROOT / 'src' / 'whisper_key' / 'platform' / 'windows' / 'gpu.py'))
+            'wk_gpu', str(ROOT / 'src' / 'syllune' / 'platform' / 'windows' / 'gpu.py'))
         gpu = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(gpu)
         cases = [
@@ -1986,7 +1991,7 @@ class MergedFeatureTests(unittest.TestCase):
 
     # --- Vocabulary corrections ---
     def test_corrections_map_many_variants_to_one_term(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'corrections': {'CAPEX': ['cap x', 'copics'], 'MySQL': ['my sequel']}}
         self.assertEqual(postprocess('the cap x budget', cfg), 'the CAPEX budget')
         self.assertEqual(postprocess('we use copics here', cfg), 'we use CAPEX here')
@@ -1994,19 +1999,19 @@ class MergedFeatureTests(unittest.TestCase):
 
     def test_corrections_prefer_longest_variant(self):
         # "cap" must not shadow "cap x" and leave a dangling "x".
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'corrections': {'CAP': ['cap'], 'CAPEX': ['cap x']}}
         self.assertEqual(postprocess('the cap x budget', cfg), 'the CAPEX budget')
 
     def test_corrections_are_whole_word_and_case_insensitive(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'corrections': {'MySQL': ['my sequel']}}
         self.assertEqual(postprocess('MY SEQUEL rocks', cfg), 'MySQL rocks')
         cfg2 = {'corrections': {'DOG': ['cat']}}
         self.assertEqual(postprocess('category cat', cfg2), 'category DOG')
 
     def test_corrections_tolerate_malformed_config(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         for bad in ({'corrections': 'nope'}, {'corrections': {'A': None}},
                     {'corrections': {'A': 123}}, {'corrections': []},
                     {'corrections': {'A': {'not': 'a list'}}}):
@@ -2014,30 +2019,30 @@ class MergedFeatureTests(unittest.TestCase):
 
     def test_corrections_and_replacements_coexist(self):
         # Our per-entry `replacements` must still work alongside the new map.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'corrections': {'CAPEX': ['cap x']},
                'replacements': [{'from': 'budget', 'to': 'spend'}]}
         self.assertEqual(postprocess('the cap x budget', cfg), 'the CAPEX spend')
 
     # --- Terminal tab title ---
     def test_terminal_title_parses_static_and_animated_states(self):
-        from whisper_key.terminal_title import TerminalTitle
+        from syllune.terminal_title import TerminalTitle
         t = TerminalTitle({'idle': '', 'recording': [['R', 0.1], ['  ', 0.2]],
                            'processing': '...'})
-        self.assertEqual(t._frames['idle'], [('Whisper Local', 60.0)])
+        self.assertEqual(t._frames['idle'], [('Syllune', 60.0)])
         self.assertEqual(t._frames['recording'],
-                         [('R Whisper Local', 0.1), ('   Whisper Local', 0.2)])
-        self.assertEqual(t._frames['processing'], [('... Whisper Local', 60.0)])
+                         [('R Syllune', 0.1), ('   Syllune', 0.2)])
+        self.assertEqual(t._frames['processing'], [('... Syllune', 60.0)])
 
     def test_terminal_title_falls_back_on_bad_frames(self):
-        from whisper_key.terminal_title import TerminalTitle
+        from syllune.terminal_title import TerminalTitle
         t = TerminalTitle({'recording': [['R', 'not-a-number']], 'idle': {'bad': 1}})
         # Bad frames fall back to the shipped defaults rather than raising.
         self.assertTrue(t._frames['recording'])
-        self.assertEqual(t._frames['idle'], [('Whisper Local', 60.0)])
+        self.assertEqual(t._frames['idle'], [('Syllune', 60.0)])
 
     def test_terminal_title_lifecycle_is_safe_without_a_tty(self):
-        from whisper_key.terminal_title import TerminalTitle
+        from syllune.terminal_title import TerminalTitle
         t = TerminalTitle({})
         t.update_state('recording')
         t.start()
@@ -2048,11 +2053,11 @@ class MergedFeatureTests(unittest.TestCase):
         import inspect
         # The asset must ship regardless of whether the audio backend is
         # installed, so assert that before the import that may be skipped.
-        asset = ROOT / 'src' / 'whisper_key' / 'assets' / 'sounds' / 'app_ready.wav'
+        asset = ROOT / 'src' / 'syllune' / 'assets' / 'sounds' / 'app_ready.wav'
         self.assertTrue(asset.is_file(), 'app_ready.wav must ship with the package')
         # audio_feedback pulls playsound3, which the lean CI env lacks.
         try:
-            from whisper_key.audio_feedback import AudioFeedback
+            from syllune.audio_feedback import AudioFeedback
         except Exception:
             self.skipTest('audio_feedback not importable (playsound3 absent)')
         params = inspect.signature(AudioFeedback.__init__).parameters
@@ -2063,7 +2068,7 @@ class MergedFeatureTests(unittest.TestCase):
     # --- config defaults for all of the above ---
     def test_new_config_sections_present_and_inert(self):
         from ruamel.yaml import YAML
-        with open(ROOT / 'src' / 'whisper_key' / 'config.defaults.yaml', encoding='utf-8') as f:
+        with open(ROOT / 'src' / 'syllune' / 'config.defaults.yaml', encoding='utf-8') as f:
             cfg = YAML().load(f)
         self.assertEqual(cfg['postprocess']['corrections'], {})
         self.assertTrue(cfg['audio_feedback']['ready_enabled'])
@@ -2073,7 +2078,7 @@ class MergedFeatureTests(unittest.TestCase):
         for state in ('idle', 'recording', 'processing'):
             self.assertIn(state, cfg['terminal_title'])
         # Shipping defaults must not alter ordinary text.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('hello world', dict(cfg['postprocess'])), 'hello world')
 
 
@@ -2089,7 +2094,7 @@ class ReportedIssueTests(unittest.TestCase):
         if sys.platform != 'win32':
             self.skipTest('global-hotkeys is Windows-only')
         try:
-            from whisper_key.platform.windows import hotkeys
+            from syllune.platform.windows import hotkeys
         except Exception:
             self.skipTest('global_hotkeys not installed')
         full = [['ctrl+shift+f13', lambda: None, None],
@@ -2113,7 +2118,7 @@ class ReportedIssueTests(unittest.TestCase):
     def test_windows_register_clears_first(self):
         # The mechanism behind the fix: register() must have replace semantics,
         # matching the macOS mirror, per docs/platform-abstraction.md.
-        source = (ROOT / 'src' / 'whisper_key' / 'platform' / 'windows' / 'hotkeys.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'platform' / 'windows' / 'hotkeys.py').read_text(encoding='utf-8')
         self.assertIn('clear_hotkeys()', source,
                       'register() must clear before registering (issue #6)')
 
@@ -2122,7 +2127,7 @@ class ReportedIssueTests(unittest.TestCase):
         # argv[0] for a pip console script is the launcher path, and pip ships
         # only a compiled .exe stub there — handing it to python.exe fails with
         # "can't open file". The command must invoke the module instead.
-        from whisper_key.utils import build_relaunch_command
+        from syllune.utils import build_relaunch_command
         import os
         saved = os.environ.pop('PYAPP', None)
         try:
@@ -2131,10 +2136,10 @@ class ReportedIssueTests(unittest.TestCase):
             if saved is not None:
                 os.environ['PYAPP'] = saved
         self.assertIn('-m', cmd)
-        self.assertIn('whisper_key.main', cmd)
+        self.assertIn('syllune.main', cmd)
         for part in cmd:
             self.assertFalse(
-                part.endswith('Scripts\\whisper-local') or part.endswith('Scripts/whisper-local'),
+                part.endswith('Scripts\\syllune') or part.endswith('Scripts/syllune'),
                 f'relaunch command must not reference the console script: {cmd}')
 
     def test_relaunch_command_prefers_pyapp_executable(self):
@@ -2144,9 +2149,9 @@ class ReportedIssueTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import utils
+        from syllune import utils
         with tempfile.TemporaryDirectory() as d:
-            fake = Path(d) / 'whisper-local.exe'
+            fake = Path(d) / 'syllune.exe'
             fake.write_text('stub', encoding='utf-8')
             with mock.patch.dict(os.environ, {'PYAPP': str(fake)}):
                 with mock.patch.object(utils.sys, 'executable', str(Path(d) / 'python.exe')):
@@ -2158,7 +2163,7 @@ class ReportedIssueTests(unittest.TestCase):
         import os
         if sys.platform != 'win32':
             self.skipTest('pythonw selection is Windows-only')
-        from whisper_key.utils import build_relaunch_command
+        from syllune.utils import build_relaunch_command
         saved = os.environ.pop('PYAPP', None)
         try:
             windowed = build_relaunch_command(windowless=False)
@@ -2173,15 +2178,15 @@ class ReportedIssueTests(unittest.TestCase):
         # The two call sites disagreed once (autostart fixed for #2, tray left
         # broken for #3). They must share one implementation now.
         try:
-            from whisper_key import autostart
+            from syllune import autostart
         except Exception:
             self.skipTest('autostart not importable on this platform')
-        from whisper_key.utils import build_relaunch_command
+        from syllune.utils import build_relaunch_command
         self.assertEqual(autostart._launch_command(), build_relaunch_command(windowless=True))
 
     # --- #4: macOS hotkeys must be able to suppress the underlying key ---
     def test_macos_hotkeys_use_event_tap_with_fallback(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'platform' / 'macos' / 'hotkeys.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'platform' / 'macos' / 'hotkeys.py').read_text(encoding='utf-8')
         self.assertIn('CGEventTapCreate', source, 'event tap needed to consume keystrokes')
         # The NSEvent monitor must survive as the no-permission fallback.
         self.assertIn('addGlobalMonitorForEventsMatchingMask_handler_', source)
@@ -2196,7 +2201,7 @@ class ReportedIssueHandlerTests(unittest.TestCase):
     def _listener(self):
         import unittest.mock as mock
         try:
-            from whisper_key.hotkey_listener import HotkeyListener
+            from syllune.hotkey_listener import HotkeyListener
         except Exception:
             self.skipTest('hotkey_listener not importable on this platform')
         # Build without __init__ so no real hotkeys are registered by construction.
@@ -2223,7 +2228,7 @@ class ReportedIssueHandlerTests(unittest.TestCase):
         import unittest.mock as mock
         listener = self._listener()
         try:
-            from whisper_key.platform import hotkeys as hk
+            from syllune.platform import hotkeys as hk
         except Exception:
             self.skipTest('platform hotkeys not importable')
 
@@ -2285,7 +2290,7 @@ class ReportedIssueHandlerTests(unittest.TestCase):
     def test_tray_restart_spawns_a_runnable_command(self):
         import unittest.mock as mock
         try:
-            from whisper_key.system_tray import SystemTray
+            from syllune.system_tray import SystemTray
         except Exception:
             self.skipTest('system_tray not importable on this platform')
         tray = SystemTray.__new__(SystemTray)
@@ -2302,13 +2307,13 @@ class ReportedIssueHandlerTests(unittest.TestCase):
         # It must be runnable: either the app executable, or python -m.
         if len(cmd) > 1:
             self.assertIn('-m', cmd)
-            self.assertIn('whisper_key.main', cmd)
+            self.assertIn('syllune.main', cmd)
 
     def test_tray_restart_does_not_exit_when_spawn_fails(self):
         # A failed relaunch must never leave the user with no app at all.
         import unittest.mock as mock
         try:
-            from whisper_key.system_tray import SystemTray
+            from syllune.system_tray import SystemTray
         except Exception:
             self.skipTest('system_tray not importable on this platform')
         tray = SystemTray.__new__(SystemTray)
@@ -2330,7 +2335,7 @@ class MacOSHotkeyTests(unittest.TestCase):
         if sys.platform != 'darwin':
             self.skipTest('macOS-only')
         try:
-            from whisper_key.platform.macos import hotkeys
+            from syllune.platform.macos import hotkeys
         except Exception as e:
             self.skipTest(f'pyobjc not available: {e}')
         return hotkeys
@@ -2376,7 +2381,7 @@ class UninstallSafetyTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import uninstall
+        from syllune import uninstall
         with tempfile.TemporaryDirectory() as d:
             hub = Path(d) / 'hub'
             hub.mkdir()
@@ -2398,7 +2403,7 @@ class UninstallSafetyTests(unittest.TestCase):
     def test_no_models_selected_when_cache_absent(self):
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import uninstall
+        from syllune import uninstall
         with mock.patch.object(uninstall, '_hf_hub_root', return_value=Path('/nonexistent-xyz')):
             self.assertEqual(uninstall._our_cached_models(), [])
 
@@ -2409,9 +2414,9 @@ class UninstallSafetyTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import uninstall
+        from syllune import uninstall
         with tempfile.TemporaryDirectory() as d:
-            cfg = Path(d) / 'whisperkey'
+            cfg = Path(d) / 'Syllune'
             cfg.mkdir()
             (cfg / 'user_settings.yaml').write_text('x', encoding='utf-8')
             with mock.patch.object(uninstall, 'get_user_app_data_path', return_value=str(cfg)),                  mock.patch.object(uninstall, '_our_cached_models', return_value=[]),                  mock.patch.object(uninstall, '_confirm', return_value=False):
@@ -2424,10 +2429,10 @@ class UninstallSafetyTests(unittest.TestCase):
     def test_models_need_their_own_confirmation(self):
         # Never touch the real login item: run_uninstall() calls the live
         # autostart module, and on a Mac with Start on login on this test
-        # used to delete ~/Library/LaunchAgents/com.drajb.whisper-local.plist.
+        # used to delete ~/Library/LaunchAgents/com.loathious.syllune.plist.
         import unittest.mock as _mock
-        self.enterContext(_mock.patch('whisper_key.autostart.is_enabled', return_value=False))
-        self.enterContext(_mock.patch('whisper_key.autostart.disable'))
+        self.enterContext(_mock.patch('syllune.autostart.is_enabled', return_value=False))
+        self.enterContext(_mock.patch('syllune.autostart.disable'))
         # Confirming the settings removal must NOT imply consent to delete
         # gigabytes of models -- that is a second, separate decision.
         import io
@@ -2435,9 +2440,9 @@ class UninstallSafetyTests(unittest.TestCase):
         import tempfile
         import unittest.mock as mock
         from pathlib import Path
-        from whisper_key import uninstall
+        from syllune import uninstall
         with tempfile.TemporaryDirectory() as d:
-            cfg = Path(d) / 'whisperkey'; cfg.mkdir()
+            cfg = Path(d) / 'Syllune'; cfg.mkdir()
             model = Path(d) / 'models--Systran--faster-whisper-base'; model.mkdir()
             (model / 'model.bin').write_bytes(b'x' * 100)
             answers = iter([True, False])   # yes to settings, NO to models
@@ -2450,15 +2455,15 @@ class UninstallSafetyTests(unittest.TestCase):
     def test_clean_machine_reports_nothing_to_do(self):
         # Never touch the real login item: run_uninstall() calls the live
         # autostart module, and on a Mac with Start on login on this test
-        # used to delete ~/Library/LaunchAgents/com.drajb.whisper-local.plist.
+        # used to delete ~/Library/LaunchAgents/com.loathious.syllune.plist.
         import unittest.mock as _mock
-        self.enterContext(_mock.patch('whisper_key.autostart.is_enabled', return_value=False))
-        self.enterContext(_mock.patch('whisper_key.autostart.disable'))
+        self.enterContext(_mock.patch('syllune.autostart.is_enabled', return_value=False))
+        self.enterContext(_mock.patch('syllune.autostart.disable'))
         import io
         import contextlib
         import unittest.mock as mock
-        from whisper_key import uninstall
-        with mock.patch.object(uninstall, 'get_user_app_data_path', return_value='/nonexistent-xyz'),              mock.patch.object(uninstall, '_our_cached_models', return_value=[]),              mock.patch.object(uninstall, '_confirm', side_effect=AssertionError('must not prompt')):
+        from syllune import uninstall
+        with mock.patch.object(uninstall, 'get_user_app_data_path', return_value='/nonexistent-xyz'),              mock.patch.object(uninstall, '_our_cached_models', return_value=[]), mock.patch.object(uninstall, '_app_cache_dir', return_value=None),              mock.patch.object(uninstall, '_confirm', side_effect=AssertionError('must not prompt')):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 rc = uninstall.run_uninstall()
@@ -2480,7 +2485,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
         return cfg
 
     def test_filler_stripping_preserves_line_structure(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         text = 'alpha um period new paragraph bravo new line charlie'
         without = postprocess(text, self._fmt_cfg(strip_filler_words=False))
         with_strip = postprocess(text, self._fmt_cfg(strip_filler_words=True))
@@ -2489,7 +2494,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
         self.assertIn(LF + LF, with_strip, 'paragraph break must survive (issue #9)')
 
     def test_filler_stripping_still_removes_fillers(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         got = postprocess('um hello uh there you know friend', {'strip_filler_words': True})
         for filler in ('um ', 'uh '):
             self.assertNotIn(filler, got)
@@ -2501,7 +2506,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
     def test_filler_stripping_does_not_collapse_paragraphs(self):
         # The second half of the bug: even newlines that survived the filler
         # pattern were flattened by a blanket whitespace collapse.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('one' + LF + LF + 'two', {'strip_filler_words': True}),
                          'one' + LF + LF + 'two')
         # Runs of plain spaces SHOULD still collapse.
@@ -2515,7 +2520,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
         for module, func in (('history_window', 'show_history'),
                              ('cheat_sheet', 'show_cheat_sheet')):
             try:
-                mod = __import__('whisper_key.' + module, fromlist=[func])
+                mod = __import__('syllune.' + module, fromlist=[func])
             except Exception:
                 self.skipTest(module + ' not importable on this platform')
             source = inspect.getsource(getattr(mod, func))
@@ -2523,7 +2528,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
                           func + ' must return its thread so the CLI can join it (issue #10)')
 
     def test_history_cli_joins_instead_of_sleeping(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'main.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'main.py').read_text(encoding='utf-8')
         block = source[source.index('if args.history:'):source.index('if args.enable_autostart:')]
         self.assertIn('.join()', block)
         self.assertNotIn('time.sleep(0.5)', block,
@@ -2534,7 +2539,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
         # clipboard_manager pulls the platform keyboard backend and PIL,
         # neither of which the lean CI env installs.
         try:
-            from whisper_key.clipboard_manager import ClipboardManager
+            from syllune.clipboard_manager import ClipboardManager
         except Exception:
             self.skipTest('clipboard_manager not importable in this env')
         c = ClipboardManager.__new__(ClipboardManager)
@@ -2551,7 +2556,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
 
     def test_fallback_window_respects_clipboard_policy(self):
         import inspect
-        from whisper_key import fallback_window
+        from syllune import fallback_window
         params = inspect.signature(fallback_window.FallbackWindow.show).parameters
         self.assertIn('allow_clipboard', params)
         body = inspect.getsource(fallback_window.FallbackWindow._run_window)
@@ -2561,7 +2566,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
         self.assertIn('def _copy_again', body)
 
     def test_recovery_paths_check_the_policy(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'state_manager.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'state_manager.py').read_text(encoding='utf-8')
         # Suppressed/missing targets now save a pending dictation without any
         # automatic copy. Retry remains the one legacy silent-copy recovery.
         # End-to-end behavior is covered by test_flow_capture_pipeline.py.
@@ -2573,7 +2578,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
     def test_copy_only_is_announced_once_per_rule(self):
         import unittest.mock as mock
         try:
-            from whisper_key.state_manager import StateManager
+            from syllune.state_manager import StateManager
         except Exception:
             self.skipTest('state_manager not importable on this platform')
         sm = StateManager.__new__(StateManager)
@@ -2594,7 +2599,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
         # Importing the platform package loads the OS backend (win32api /
         # AppKit), which the lean CI env doesn't install.
         try:
-            from whisper_key.platform import app as platform_app
+            from syllune.platform import app as platform_app
         except Exception:
             self.skipTest('platform backend not importable in this env')
         self.assertTrue(hasattr(platform_app, 'run_on_ui_thread'))
@@ -2606,7 +2611,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
         # Every AppKit-touching write must go through _on_ui_thread. A direct
         # assignment from a worker thread is an instant SIGTRAP on macOS 27.
         import re
-        source = (ROOT / 'src' / 'whisper_key' / 'system_tray.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'system_tray.py').read_text(encoding='utf-8')
         offenders = []
         for i, line in enumerate(source.splitlines(), 1):
             stripped = line.strip()
@@ -2618,7 +2623,7 @@ class UserReportedSeptemberTests(unittest.TestCase):
                          'tray writes must be marshalled to the UI thread (issue #13)')
 
     def test_macos_marshal_uses_main_queue(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'platform' / 'macos' / 'app.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'platform' / 'macos' / 'app.py').read_text(encoding='utf-8')
         self.assertIn('NSThread.isMainThread()', source, 'fast path when already on main')
         self.assertIn('mainQueue', source, 'must dispatch to the main queue')
 
@@ -2631,7 +2636,7 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
     def _load(self, relative_path, name):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
-            name, str(ROOT / 'src' / 'whisper_key' / relative_path))
+            name, str(ROOT / 'src' / 'syllune' / relative_path))
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
@@ -2639,7 +2644,7 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
     # --- #15: pip-installed CUDA libraries were on no DLL search path ---
     def test_nvidia_dll_dirs_are_found_in_site_packages(self):
         import tempfile
-        from whisper_key.utils import find_nvidia_dll_dirs
+        from syllune.utils import find_nvidia_dll_dirs
         with tempfile.TemporaryDirectory() as root:
             for lib in ('cublas', 'cudnn', 'cuda_runtime'):
                 (Path(root) / 'nvidia' / lib / 'bin').mkdir(parents=True)
@@ -2650,7 +2655,7 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
 
     def test_nvidia_dll_path_registers_both_loaders_on_windows(self):
         import unittest.mock as mock
-        from whisper_key import utils
+        from syllune import utils
         dirs = [os.path.join('sp', 'nvidia', 'cublas', 'bin'),
                 os.path.join('sp', 'nvidia', 'cudnn', 'bin')]
         added = []
@@ -2668,14 +2673,14 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
 
     def test_nvidia_dll_path_is_a_no_op_off_windows(self):
         import unittest.mock as mock
-        from whisper_key import utils
+        from syllune import utils
         with mock.patch.object(utils.sys, 'platform', 'darwin'), \
              mock.patch.object(utils, 'find_nvidia_dll_dirs') as finder:
             utils.setup_nvidia_dll_path()
         finder.assert_not_called()
 
     def test_dll_path_is_set_up_before_the_ml_stack_imports(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'main.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'main.py').read_text(encoding='utf-8')
         self.assertLess(source.index('setup_nvidia_dll_path()'),
                         source.index('from .whisper_engine import'))
 
@@ -2748,7 +2753,7 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
 
     def _fake_hardware_detection(self, missing):
         import types
-        fake = types.ModuleType('whisper_key.hardware_detection')
+        fake = types.ModuleType('syllune.hardware_detection')
         fake.missing_gpu_libraries = lambda: list(missing)
         return fake
 
@@ -2765,9 +2770,9 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
         fake_fw.WhisperModel = mock.Mock(name='WhisperModel')
         with mock.patch.dict(sys.modules, {
                 'faster_whisper': fake_fw,
-                'whisper_key.hardware_detection': self._fake_hardware_detection(['cudnn_ops64_9.dll'])}):
-            sys.modules.pop('whisper_key.whisper_engine', None)
-            from whisper_key.whisper_engine import WhisperEngine
+                'syllune.hardware_detection': self._fake_hardware_detection(['cudnn_ops64_9.dll'])}):
+            sys.modules.pop('syllune.whisper_engine', None)
+            from syllune.whisper_engine import WhisperEngine
             # The engine prints emoji progress lines; main() switches stdout to
             # UTF-8 first, but a cp1252 test console (Windows CI) would choke.
             with self.assertRaises(RuntimeError) as ctx, contextlib.redirect_stdout(io.StringIO()):
@@ -2785,9 +2790,9 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
         fake_fw.WhisperModel = mock.Mock(name='WhisperModel')
         with mock.patch.dict(sys.modules, {
                 'faster_whisper': fake_fw,
-                'whisper_key.hardware_detection': self._fake_hardware_detection(['cublas64_12.dll'])}):
-            sys.modules.pop('whisper_key.whisper_engine', None)
-            from whisper_key.whisper_engine import WhisperEngine
+                'syllune.hardware_detection': self._fake_hardware_detection(['cublas64_12.dll'])}):
+            sys.modules.pop('syllune.whisper_engine', None)
+            from syllune.whisper_engine import WhisperEngine
             with contextlib.redirect_stdout(io.StringIO()):  # emoji vs a cp1252 console
                 WhisperEngine(model_key='base', device='cpu', compute_type='int8')
             fake_fw.WhisperModel.assert_called_once()
@@ -2800,7 +2805,7 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
         import contextlib
         import unittest.mock as mock
         reimport_under(self, fake_platform_modules(getch=lambda: self.fail('must not wait for a keypress')))
-        from whisper_key import onboarding
+        from syllune import onboarding
         with mock.patch.object(onboarding.sys, 'stdin', None), \
              mock.patch.object(onboarding, 'prompt_choice') as prompt, \
              contextlib.redirect_stdout(io.StringIO()):
@@ -2822,13 +2827,13 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
     def test_missing_accessibility_in_a_terminal_still_asks_there(self):
         import types
         import unittest.mock as mock
-        terminal_ui = types.ModuleType('whisper_key.terminal_ui')
+        terminal_ui = types.ModuleType('syllune.terminal_ui')
         terminal_ui.prompt_choice = mock.Mock(return_value=2)  # "Disable auto-paste"
-        permissions = self._load('platform/macos/permissions.py', 'whisper_key.platform.macos.permissions_tty')
+        permissions = self._load('platform/macos/permissions.py', 'syllune.platform.macos.permissions_tty')
         stdin = mock.Mock()
         stdin.isatty.return_value = True
         config = mock.Mock()
-        with mock.patch.dict(sys.modules, {'whisper_key.terminal_ui': terminal_ui}), \
+        with mock.patch.dict(sys.modules, {'syllune.terminal_ui': terminal_ui}), \
              mock.patch.object(permissions.sys, 'stdin', stdin), \
              mock.patch.object(permissions, 'request_accessibility_permission') as request:
             self.assertTrue(permissions.handle_missing_permission(config))
@@ -2840,14 +2845,14 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
         import io
         import contextlib
         import unittest.mock as mock
-        from whisper_key import doctor
+        from syllune import doctor
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             with mock.patch.dict(sys.modules, {
-                    'whisper_key.hardware_detection': self._fake_hardware_detection(['cublas64_12.dll'])}):
+                    'syllune.hardware_detection': self._fake_hardware_detection(['cublas64_12.dll'])}):
                 self.assertEqual(doctor._check_gpu_libraries(), 1)
             with mock.patch.dict(sys.modules, {
-                    'whisper_key.hardware_detection': self._fake_hardware_detection([])}):
+                    'syllune.hardware_detection': self._fake_hardware_detection([])}):
                 self.assertEqual(doctor._check_gpu_libraries(), 0)
         self.assertIn('cublas64_12.dll', out.getvalue())
 
@@ -2855,13 +2860,13 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
     def test_platform_app_mirrors_declare_the_tk_constraint(self):
         import re
         for plat, expected in (('macos', 'True'), ('windows', 'False')):
-            source = (ROOT / 'src' / 'whisper_key' / 'platform' / plat / 'app.py').read_text(encoding='utf-8')
+            source = (ROOT / 'src' / 'syllune' / 'platform' / plat / 'app.py').read_text(encoding='utf-8')
             self.assertRegex(source, r'(?m)^TK_MAIN_THREAD_ONLY = ' + re.escape(expected) + '$',
                              plat + ' app.py must declare TK_MAIN_THREAD_ONLY (mirrored API)')
 
     def test_tk_constraint_helper(self):
         import unittest.mock as mock
-        from whisper_key.utils import tk_requires_main_thread
+        from syllune.utils import tk_requires_main_thread
         for constraint in (True, False):
             with mock.patch.dict(sys.modules, fake_platform_modules(TK_MAIN_THREAD_ONLY=constraint)):
                 self.assertIs(tk_requires_main_thread(), constraint)
@@ -2920,11 +2925,11 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
 
     def test_overlay_stands_down_where_tk_is_main_thread_only(self):
         import unittest.mock as mock
-        from whisper_key.level_overlay import LevelOverlay
+        from syllune.level_overlay import LevelOverlay
         overlay = LevelOverlay(level_provider=lambda: 0.0)
         overlay._available = True  # as if tkinter were importable
-        with mock.patch('whisper_key.utils.tk_requires_main_thread', return_value=True), \
-             mock.patch('whisper_key.level_overlay.threading.Thread') as thread:
+        with mock.patch('syllune.utils.tk_requires_main_thread', return_value=True), \
+             mock.patch('syllune.level_overlay.threading.Thread') as thread:
             overlay.start()
         thread.assert_not_called()
         self.assertFalse(overlay._available, 'every later overlay call must be a no-op')
@@ -2934,7 +2939,7 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
     def test_welcome_runs_inline_on_macos_and_threaded_elsewhere(self):
         import threading
         import unittest.mock as mock
-        from whisper_key import first_run
+        from syllune import first_run
         seen = []
         done = threading.Event()
 
@@ -2943,9 +2948,9 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
             done.set()
         event = threading.Event()
         with mock.patch.object(first_run, '_run_welcome', fake_run):
-            with mock.patch('whisper_key.utils.tk_requires_main_thread', return_value=True):
+            with mock.patch('syllune.utils.tk_requires_main_thread', return_value=True):
                 first_run.show_welcome_window(shutdown_event=event)
-            with mock.patch('whisper_key.utils.tk_requires_main_thread', return_value=False):
+            with mock.patch('syllune.utils.tk_requires_main_thread', return_value=False):
                 done.clear()
                 first_run.show_welcome_window(shutdown_event=event)
                 self.assertTrue(done.wait(2))
@@ -3012,7 +3017,7 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
         tkinter.Text = text_class or Widget
         tkinter.BooleanVar = BooleanVar
         on_close = mock.Mock()
-        from whisper_key import first_run
+        from syllune import first_run
         with mock.patch.dict(sys.modules, {'tkinter': tkinter}), \
              mock.patch.object(first_run, 'mark_first_run_complete') as mark:
             first_run._run_welcome(on_close, 'CTRL+WIN', shutdown_event)
@@ -3066,7 +3071,7 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
         on_close.assert_not_called()
 
     def test_main_hands_the_welcome_window_the_shutdown_event(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'main.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'main.py').read_text(encoding='utf-8')
         call = source[source.index('show_welcome_window('):]
         call = call[:call.index(')\n')]
         self.assertIn('shutdown_event=shutdown_event', call)
@@ -3079,16 +3084,16 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
             for variable in root.variables:
                 variable.value = True  # what clicking the Checkbutton does
             root.close_handler()
-        with mock.patch('whisper_key.autostart.is_supported', return_value=True), \
-             mock.patch('whisper_key.autostart.enable') as enable:
+        with mock.patch('syllune.autostart.is_supported', return_value=True), \
+             mock.patch('syllune.autostart.enable') as enable:
             self._run_welcome_with_fake_tk(tick_then_dismiss)
         enable.assert_called_once()
 
     # --- #14 follow-through: every other Tk window on macOS ---
     def test_windows_stay_in_process_where_tk_threads_are_fine(self):
         import unittest.mock as mock
-        from whisper_key import window_launcher
-        with mock.patch('whisper_key.utils.tk_requires_main_thread', return_value=False), \
+        from syllune import window_launcher
+        with mock.patch('syllune.utils.tk_requires_main_thread', return_value=False), \
              mock.patch.object(window_launcher.subprocess, 'Popen') as popen:
             self.assertFalse(window_launcher.open_in_child_process('cheat-sheet'))
         popen.assert_not_called()
@@ -3096,9 +3101,9 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
     def test_macos_windows_open_in_a_child_with_the_payload_on_stdin(self):
         import json
         import unittest.mock as mock
-        from whisper_key import window_launcher
+        from syllune import window_launcher
         child = mock.Mock()
-        with mock.patch('whisper_key.utils.tk_requires_main_thread', return_value=True), \
+        with mock.patch('syllune.utils.tk_requires_main_thread', return_value=True), \
              mock.patch.object(window_launcher.subprocess, 'Popen', return_value=child) as popen, \
              mock.patch.object(window_launcher.threading, 'Thread'):
             handled = window_launcher.open_in_child_process('fallback', {'transcript': 'secret words'})
@@ -3112,22 +3117,22 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
 
     def test_failed_spawn_never_falls_back_to_in_process_tk(self):
         import unittest.mock as mock
-        from whisper_key import window_launcher
-        with mock.patch('whisper_key.utils.tk_requires_main_thread', return_value=True), \
+        from syllune import window_launcher
+        with mock.patch('syllune.utils.tk_requires_main_thread', return_value=True), \
              mock.patch.object(window_launcher.subprocess, 'Popen', side_effect=OSError('nope')):
             self.assertTrue(window_launcher.open_in_child_process('add-word'))
 
     def test_child_runs_each_window_blocking_on_its_main_thread(self):
         import io
         import unittest.mock as mock
-        from whisper_key import window_launcher
-        for name, target in (('cheat-sheet', 'whisper_key.cheat_sheet.show_cheat_sheet'),
-                             ('add-word', 'whisper_key.dictionary.show_add_word_dialog'),
-                             ('history', 'whisper_key.history_window.show_history')):
+        from syllune import window_launcher
+        for name, target in (('cheat-sheet', 'syllune.cheat_sheet.show_cheat_sheet'),
+                             ('add-word', 'syllune.dictionary.show_add_word_dialog'),
+                             ('history', 'syllune.history_window.show_history')):
             with mock.patch(target) as show:
                 self.assertEqual(window_launcher.run_window(name, io.StringIO('')), 0)
             self.assertTrue(show.call_args.kwargs.get('blocking'), name + ' must run blocking')
-        with mock.patch('whisper_key.fallback_window.FallbackWindow._run_window') as run:
+        with mock.patch('syllune.fallback_window.FallbackWindow._run_window') as run:
             code = window_launcher.run_window(
                 'fallback', io.StringIO('{"transcript": "hi", "reason": "r", "allow_clipboard": false}'))
         self.assertEqual(code, 0)
@@ -3136,11 +3141,11 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
 
     def test_fallback_window_hands_off_instead_of_threading(self):
         import unittest.mock as mock
-        from whisper_key.fallback_window import FallbackWindow
+        from syllune.fallback_window import FallbackWindow
         window = FallbackWindow()
         window._available = True
-        with mock.patch('whisper_key.window_launcher.open_in_child_process', return_value=True) as launch, \
-             mock.patch('whisper_key.fallback_window.threading.Thread') as thread:
+        with mock.patch('syllune.window_launcher.open_in_child_process', return_value=True) as launch, \
+             mock.patch('syllune.fallback_window.threading.Thread') as thread:
             window.show('dictated text', allow_clipboard=False)
         thread.assert_not_called()
         payload = launch.call_args.args[1]
@@ -3149,8 +3154,8 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
         self.assertTrue(payload['reason'], 'the default reason must travel with it')
 
     def test_window_flag_choices_match_the_launcher(self):
-        from whisper_key.window_launcher import WINDOW_NAMES
-        source = (ROOT / 'src' / 'whisper_key' / 'main.py').read_text(encoding='utf-8')
+        from syllune.window_launcher import WINDOW_NAMES
+        source = (ROOT / 'src' / 'syllune' / 'main.py').read_text(encoding='utf-8')
         line = source[source.index("'--window'"):]
         line = line[:line.index('\n')]
         for name in WINDOW_NAMES:
@@ -3180,13 +3185,13 @@ class UserReportedLateSeptemberTests(unittest.TestCase):
                 gc.enable()
 
 
-class WisprStyleFeatureTests(unittest.TestCase):
-    """Wispr Flow–style editing added in 0.20.0: backtrack, stutters, spoken
+class EditingFeatureTests(unittest.TestCase):
+    """Editing features: backtrack, stutters, spoken
     lists, styles, snippets, paste-last, double-tap lock, whisper mode."""
 
     # --- Backtrack ---
     def test_backtrack_replaces_the_value_it_corrects(self):
-        from whisper_key.dictation_cleanup import apply_backtrack
+        from syllune.dictation_cleanup import apply_backtrack
         cases = {
             "Let's meet at 2, actually 3 tomorrow.": "Let's meet at 3 tomorrow.",
             'Tuesday, no wait, Wednesday works.': 'Wednesday works.',
@@ -3199,7 +3204,7 @@ class WisprStyleFeatureTests(unittest.TestCase):
             self.assertEqual(apply_backtrack(spoken), typed, spoken)
 
     def test_backtrack_leaves_ordinary_prose_alone(self):
-        from whisper_key.dictation_cleanup import apply_backtrack
+        from syllune.dictation_cleanup import apply_backtrack
         for text in ('I actually like it.', 'Sorry, 3 people are here.',
                      'It was 2. Actually 3 would be better.',   # never reaches across a sentence
                      'Meet Tuesday at 2, actually Friday.'):    # class mismatch picks the weekday
@@ -3208,21 +3213,21 @@ class WisprStyleFeatureTests(unittest.TestCase):
 
     def test_backtrack_is_linear_on_huge_dictations(self):
         import time
-        from whisper_key.dictation_cleanup import apply_backtrack
+        from syllune.dictation_cleanup import apply_backtrack
         text = 'I actually think ' * 20000 + 'at 2 actually 3'
         start = time.monotonic()
         self.assertTrue(apply_backtrack(text).endswith('at 3'))
         self.assertLess(time.monotonic() - start, 2.0, 'must stay O(n)')
 
     def test_backtrack_runs_only_when_enabled(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('at 2 actually 3', {'voice_editing': False}), 'at 2 actually 3')
         self.assertEqual(postprocess('at 2 actually 3', {'backtrack': {'enabled': True}}), 'at 3')
         self.assertEqual(postprocess('at 2 swap 3', {'backtrack': {'enabled': True, 'cues': ['swap']}}), 'at 3')
 
     # --- Stutters ---
     def test_repeated_words_collapse_but_real_doubles_stay(self):
-        from whisper_key.dictation_cleanup import remove_repeated_words
+        from syllune.dictation_cleanup import remove_repeated_words
         self.assertEqual(remove_repeated_words('I I think the the cat'), 'I think the cat')
         self.assertEqual(remove_repeated_words('We, we should go'), 'We should go')
         for keep in ('I had had enough', 'very very good', 'Bye bye', '11 11'):
@@ -3230,7 +3235,7 @@ class WisprStyleFeatureTests(unittest.TestCase):
 
     # --- Spoken lists ---
     def test_spoken_list_becomes_a_list(self):
-        from whisper_key.dictation_cleanup import apply_list_formatting
+        from syllune.dictation_cleanup import apply_list_formatting
         self.assertEqual(apply_list_formatting('My list: first, milk. Second, eggs. Third, bread.'),
                          'My list:\n1. Milk\n2. Eggs\n3. Bread')
         self.assertEqual(apply_list_formatting('One, buy milk. Two, call mom, and three, pay rent.'),
@@ -3239,25 +3244,25 @@ class WisprStyleFeatureTests(unittest.TestCase):
                          '- Milk\n- Eggs')
 
     def test_prose_that_counts_is_not_a_list(self):
-        from whisper_key.dictation_cleanup import apply_list_formatting
+        from syllune.dictation_cleanup import apply_list_formatting
         for text in ('One of the two options is fine.', 'First, we go.',
                      'First of all, hello. Second, world.'):
             self.assertEqual(apply_list_formatting(text), text)
 
     def test_list_takes_no_closing_period(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('first, milk. second, eggs.',
                                      {'list_formatting': True, 'ensure_punctuation': True}),
                          '1. Milk\n2. Eggs')
 
     # --- Lowercase / styles ---
     def test_lowercase_keeps_acronyms_mixed_case_and_taught_terms(self):
-        from whisper_key.dictation_cleanup import apply_lowercase
-        self.assertEqual(apply_lowercase('Hello There, NASA and iPhone and Rohit.', protected=['Rohit']),
-                         'hello there, NASA and iPhone and Rohit.')
+        from syllune.dictation_cleanup import apply_lowercase
+        self.assertEqual(apply_lowercase('Hello There, NASA and iPhone and Alex.', protected=['Alex']),
+                         'hello there, NASA and iPhone and Alex.')
 
     def test_style_resolution(self):
-        from whisper_key.styles import resolve_style
+        from syllune.styles import resolve_style
         self.assertTrue(resolve_style('very casual')['lowercase'])
         self.assertEqual(resolve_style('nope'), {}, 'unknown styles are ignored')
         self.assertEqual(resolve_style(''), {})
@@ -3265,7 +3270,7 @@ class WisprStyleFeatureTests(unittest.TestCase):
         self.assertEqual(custom, {'capitalize_first': True}, 'a style can only set formatting toggles')
 
     def test_style_precedence(self):
-        from whisper_key.app_rules import effective_postprocess_config
+        from syllune.app_rules import effective_postprocess_config
         global_cfg = {'style': 'formal', 'capitalize_first': False}
         cfg = effective_postprocess_config(global_cfg)
         self.assertTrue(cfg['capitalize_first'], 'the global style wins over global toggles')
@@ -3277,56 +3282,56 @@ class WisprStyleFeatureTests(unittest.TestCase):
         self.assertFalse(cfg['lowercase'], "a rule's own toggle beats its style")
 
     def test_postprocess_applies_a_style_key(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('Hello There', {'style': 'formal'}), 'Hello There.')
         self.assertEqual(postprocess('Hello There.', {'style': 'very_casual'}), 'hello there')
 
     def test_shipped_app_rules_use_known_styles(self):
         from ruamel.yaml import YAML
-        from whisper_key.styles import STYLE_PRESETS
-        rules = YAML().load((ROOT / 'src' / 'whisper_key' / 'app_rules.defaults.yaml').read_text(encoding='utf-8'))['rules']
+        from syllune.styles import STYLE_PRESETS
+        rules = YAML().load((ROOT / 'src' / 'syllune' / 'app_rules.defaults.yaml').read_text(encoding='utf-8'))['rules']
         styles = [r['style'] for r in rules if 'style' in r]
         self.assertTrue(styles)
         for style in styles:
             self.assertIn(style, STYLE_PRESETS)
 
     # --- Snippets ---
-    _SNIPPETS = [{'trigger': 'my signature', 'expansion': 'Best,\nRohit'},
-                 {'trigger': 'my work signature', 'expansion': 'Rohit B.\nEngineer'},
+    _SNIPPETS = [{'trigger': 'my signature', 'expansion': 'Best,\nAlex'},
+                 {'trigger': 'my work signature', 'expansion': 'Alex B.\nEngineer'},
                  {'trigger': 'my address', 'expansion': '1 Main St', 'mode': 'alone'},
                  {'trigger': 'weird', 'expansion': r'\1 $0 (.*)'},
                  {'nonsense': True}, 'not even a dict']
 
     def test_snippet_expands_inline(self):
-        from whisper_key.snippets import expand_snippets
-        self.assertEqual(expand_snippets('Thanks. My signature.', self._SNIPPETS), ('Thanks. Best,\nRohit', False))
+        from syllune.snippets import expand_snippets
+        self.assertEqual(expand_snippets('Thanks. My signature.', self._SNIPPETS), ('Thanks. Best,\nAlex', False))
         self.assertEqual(expand_snippets('Thanks. my work signature', self._SNIPPETS)[0],
-                         'Thanks. Rohit B.\nEngineer', 'the longer trigger wins')
+                         'Thanks. Alex B.\nEngineer', 'the longer trigger wins')
 
     def test_whole_utterance_snippet_is_delivered_verbatim(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'capitalize_first': True, 'ensure_punctuation': True, 'snippets': self._SNIPPETS}
-        self.assertEqual(postprocess('My signature.', cfg), 'Best,\nRohit')
+        self.assertEqual(postprocess('My signature.', cfg), 'Best,\nAlex')
         self.assertEqual(postprocess('My address', cfg), '1 Main St')
         self.assertEqual(postprocess('send my address now', cfg), 'Send my address now.',
                          '"alone" snippets never fire mid-sentence')
 
     def test_snippet_expansion_is_literal_and_variables_fill_in(self):
         import datetime
-        from whisper_key.snippets import expand_snippets
+        from syllune.snippets import expand_snippets
         self.assertEqual(expand_snippets('weird', self._SNIPPETS)[0], r'\1 $0 (.*)')
         today = datetime.date.today().strftime('%Y-%m-%d')
         text, _ = expand_snippets('stamp', [{'trigger': 'stamp', 'expansion': 'On ${date}'}])
         self.assertEqual(text, 'On ' + today)
 
     def test_lowercase_style_never_touches_a_snippet(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'style': 'very_casual', 'snippets': self._SNIPPETS}
-        self.assertEqual(postprocess('Thanks. My signature.', cfg), 'thanks. Best,\nRohit')
+        self.assertEqual(postprocess('Thanks. My signature.', cfg), 'thanks. Best,\nAlex')
 
     # --- Double-tap lock ---
     def _latch(self, recording=True):
-        from whisper_key.hotkey_gestures import TapLatch
+        from syllune.hotkey_gestures import TapLatch
         now = [0.0]
         timers = []
 
@@ -3390,8 +3395,8 @@ class WisprStyleFeatureTests(unittest.TestCase):
                      'faster_whisper', 'playsound3'):
             fakes[name] = _stand_in_module(name)
         reimport_under(self, fakes)
-        from whisper_key.hotkey_listener import HotkeyListener
-        from whisper_key.state_manager import StateManager
+        from syllune.hotkey_listener import HotkeyListener
+        from syllune.state_manager import StateManager
         return HotkeyListener, StateManager
 
     def _state_manager(self, last=None, state='idle'):
@@ -3448,7 +3453,7 @@ class WisprStyleFeatureTests(unittest.TestCase):
             import numpy as np
         except ImportError:
             self.skipTest('numpy not installed')
-        from whisper_key.audio_gain import boost_quiet_audio, TARGET_PEAK
+        from syllune.audio_gain import boost_quiet_audio, TARGET_PEAK
         t = np.linspace(0, 1, 16000, dtype=np.float32)
         quiet = (0.1 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)  # needs 6x, under the 8x cap
         boosted = boost_quiet_audio(quiet, max_gain=8.0)
@@ -3464,7 +3469,7 @@ class WisprStyleFeatureTests(unittest.TestCase):
     # --- Config & settings ---
     def test_new_settings_ship_with_safe_defaults(self):
         from ruamel.yaml import YAML
-        cfg = YAML().load((ROOT / 'src' / 'whisper_key' / 'config.defaults.yaml').read_text(encoding='utf-8'))
+        cfg = YAML().load((ROOT / 'src' / 'syllune' / 'config.defaults.yaml').read_text(encoding='utf-8'))
         pp = cfg['postprocess']
         self.assertFalse(pp['backtrack']['enabled'])
         self.assertFalse(pp['remove_repeated_words'])
@@ -3482,25 +3487,25 @@ class ReleaseReviewFixTests(unittest.TestCase):
     come back."""
 
     def test_backtrack_handles_decimals_and_money(self):
-        from whisper_key.dictation_cleanup import apply_backtrack
+        from syllune.dictation_cleanup import apply_backtrack
         self.assertEqual(apply_backtrack('The rate is 2.5, actually 3'), 'The rate is 3')
         self.assertEqual(apply_backtrack('It costs $1.50, sorry, $2'), 'It costs $2')
         self.assertEqual(apply_backtrack('Version 3.1, I mean 4'), 'Version 4')
 
     def test_backtrack_am_pm_needs_a_word_end(self):
-        from whisper_key.dictation_cleanup import apply_backtrack
+        from syllune.dictation_cleanup import apply_backtrack
         self.assertEqual(apply_backtrack('I have 2 amazing kids, actually 3'), 'I have 3 amazing kids')
 
     def test_backtrack_leaves_prose_after_a_cue_alone(self):
-        from whisper_key.dictation_cleanup import apply_backtrack
+        from syllune.dictation_cleanup import apply_backtrack
         for text in ('We saw 3 movies, actually one of them was great',
                      'I have 2 questions, actually one more thing',
                      'Invite 2 guests, actually 3 amazing people'):
             self.assertEqual(apply_backtrack(text), text)
 
     def test_backtrack_string_cue_is_one_cue(self):
-        from whisper_key.dictation_cleanup import apply_backtrack
-        from whisper_key.text_postprocess import postprocess
+        from syllune.dictation_cleanup import apply_backtrack
+        from syllune.text_postprocess import postprocess
         self.assertEqual(apply_backtrack('I bought 2 apples and a 3 pack', 'actually'),
                          'I bought 2 apples and a 3 pack')
         self.assertEqual(postprocess('at 2 actually 3', {'backtrack': {'enabled': True, 'cues': 'actually'}}),
@@ -3508,7 +3513,7 @@ class ReleaseReviewFixTests(unittest.TestCase):
 
     def test_backtrack_stays_linear_with_many_corrections(self):
         import time
-        from whisper_key.dictation_cleanup import apply_backtrack
+        from syllune.dictation_cleanup import apply_backtrack
         text = 'at 2 tomorrow actually 3. ' * 20000
         start = time.monotonic()
         result = apply_backtrack(text)
@@ -3516,37 +3521,37 @@ class ReleaseReviewFixTests(unittest.TestCase):
         self.assertTrue(result.startswith('at 3 tomorrow. at 3 tomorrow.'))
 
     def test_stutter_removal_respects_contractions_and_clauses(self):
-        from whisper_key.dictation_cleanup import remove_repeated_words
+        from syllune.dictation_cleanup import remove_repeated_words
         for text in ("Thank you, you're welcome.", "You can, can't you?",
                      "If you want it, it's yours.", 'Whatever you choose, choose wisely.'):
             self.assertEqual(remove_repeated_words(text), text)
         self.assertEqual(remove_repeated_words('Ok. I, I think so'), 'Ok. I think so')
 
     def test_list_ends_at_its_last_sentence(self):
-        from whisper_key.dictation_cleanup import apply_list_formatting
+        from syllune.dictation_cleanup import apply_list_formatting
         self.assertEqual(apply_list_formatting('Groceries: first, milk. second, eggs. See you tonight.'),
                          'Groceries:\n1. Milk\n2. Eggs\n\nSee you tonight.')
 
     def test_odd_case_folding_never_raises(self):
-        from whisper_key.dictation_cleanup import apply_list_formatting
-        from whisper_key.snippets import expand_snippets
+        from syllune.dictation_cleanup import apply_list_formatting
+        from syllune.snippets import expand_snippets
         self.assertEqual(apply_list_formatting('FİRST, milk. second, eggs.'), 'FİRST, milk. second, eggs.')
         expand_snippets('say fİve now', [{'trigger': 'five', 'expansion': '5'}])
 
     def test_snippet_keeps_sentence_punctuation_mid_text(self):
-        from whisper_key.snippets import expand_snippets
+        from syllune.snippets import expand_snippets
         text, _ = expand_snippets('Send it to my email, then call me. My email.',
                                   [{'trigger': 'my email', 'expansion': 'me@x.com'}])
         self.assertEqual(text, 'Send it to me@x.com, then call me. me@x.com')
 
     def test_lowercase_keeps_contracted_i_and_multiword_terms(self):
-        from whisper_key.dictation_cleanup import apply_lowercase
-        self.assertEqual(apply_lowercase("I'm sure Rohit Burani and I'll Go", protected=['Rohit Burani']),
-                         "I'm sure Rohit Burani and I'll go")
+        from syllune.dictation_cleanup import apply_lowercase
+        self.assertEqual(apply_lowercase("I'm sure Alex Berg and I'll Go", protected=['Alex Berg']),
+                         "I'm sure Alex Berg and I'll go")
 
     def test_settings_save_keeps_custom_styles_and_corrections(self):
         reimport_under(self, fake_platform_modules())  # config_manager imports the platform layer
-        from whisper_key.config_manager import _compute_overrides
+        from syllune.config_manager import _compute_overrides
         defaults = {'postprocess': {'styles': {}, 'corrections': {}, 'style': ''}}
         user = {'postprocess': {'styles': {'shouty': {'capitalize_first': True}},
                                 'corrections': {'CAPEX': ['cap x']}, 'style': 'shouty'}}
@@ -3555,13 +3560,13 @@ class ReleaseReviewFixTests(unittest.TestCase):
         self.assertIn('CAPEX', kept['corrections'])
 
     def test_verbatim_keeps_spoken_formatting(self):
-        from whisper_key.styles import resolve_style
+        from syllune.styles import resolve_style
         self.assertNotIn('inline_formatting', resolve_style('verbatim'),
                          '"new line" / "comma" must keep working in code editors')
 
     def test_specific_app_rules_come_before_title_matches(self):
         from ruamel.yaml import YAML
-        rules = YAML().load((ROOT / 'src' / 'whisper_key' / 'app_rules.defaults.yaml').read_text(encoding='utf-8'))['rules']
+        rules = YAML().load((ROOT / 'src' / 'syllune' / 'app_rules.defaults.yaml').read_text(encoding='utf-8'))['rules']
         order = [r['match'][0] for r in rules]
         self.assertLess(order.index('code.exe'), order.index('slack.exe'),
                         'a VS Code window titled "slack_bot.py" must not auto-send')
@@ -3569,7 +3574,7 @@ class ReleaseReviewFixTests(unittest.TestCase):
 
     # --- Hands-free lock vs a stop key inside the record chord ---
     def _latch(self, recording=True):
-        from whisper_key.hotkey_gestures import TapLatch
+        from syllune.hotkey_gestures import TapLatch
         now = [0.0]
         events = []
 
@@ -3606,7 +3611,7 @@ class ReleaseReviewFixTests(unittest.TestCase):
     # --- Paste-last honours app rules ---
     def _paste_sm(self, rule):
         import unittest.mock as mock
-        helper = WisprStyleFeatureTests('test_paste_last_retypes_without_auto_send')
+        helper = EditingFeatureTests('test_paste_last_retypes_without_auto_send')
         helper.addCleanup = self.addCleanup
         helper.skipTest = self.skipTest
         sm = helper._state_manager(last='rm -rf build\n')
@@ -3628,11 +3633,11 @@ class ReleaseReviewFixTests(unittest.TestCase):
 
     # --- Whisper mode config is validated, and boosts after the trims ---
     def test_whisper_mode_config_is_validated(self):
-        helper = WisprStyleFeatureTests('test_paste_last_retypes_without_auto_send')
+        helper = EditingFeatureTests('test_paste_last_retypes_without_auto_send')
         helper.addCleanup = self.addCleanup
         helper.skipTest = self.skipTest
         helper._import_app_modules()
-        from whisper_key.audio_recorder import AudioRecorder
+        from syllune.audio_recorder import AudioRecorder
         parse = AudioRecorder._parse_whisper_mode
         self.assertIsNone(parse(True))
         self.assertIsNone(parse({'enabled': False}))
@@ -3641,24 +3646,24 @@ class ReleaseReviewFixTests(unittest.TestCase):
         self.assertEqual(parse({'enabled': True, 'max_gain': 4}), 4.0)
 
     def test_whisper_mode_boosts_after_silence_trimming(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'audio_recorder.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'audio_recorder.py').read_text(encoding='utf-8')
         body = source[source.index('def _build_audio_array'):source.index('def _parse_whisper_mode')]
         self.assertLess(body.index('_trim_trailing_silence(audio_array)'), body.index('boost_quiet_audio('),
                         'a boosted noise floor would defeat the anti-hallucination trims')
 
     def test_settings_window_tolerates_non_mapping_sections(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'settings_ui.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'settings_ui.py').read_text(encoding='utf-8')
         self.assertIn("wm = wm if isinstance(wm, dict) else {}", source)
         # The Settings window no longer reads `backtrack` itself (the cleanup
         # level covers it), so there is nothing left there to guard.
         self.assertNotIn("bt.get('enabled'", source)
 
     def test_bad_numeric_hotkey_setting_falls_back(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'main.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'main.py').read_text(encoding='utf-8')
         self.assertIn("_int_setting(hotkey_config.get('double_tap_window_ms'), 400)", source)
 
     def test_yaml_no_means_off(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('first, milk. second, eggs', {'list_formatting': 'no'}),
                          'first, milk. second, eggs')
         self.assertEqual(postprocess('first, milk. second, eggs', {'list_formatting': 'yes'}),
@@ -3695,7 +3700,7 @@ class LayeredDefaultsTests(unittest.TestCase):
         # for unedited copies after its dictation rules changed.
         from ruamel.yaml import YAML
         from io import StringIO
-        shipped = YAML().load((ROOT / 'src/whisper_key/app_rules.defaults.yaml').read_text(encoding='utf-8'))['rules']
+        shipped = YAML().load((ROOT / 'src/syllune/app_rules.defaults.yaml').read_text(encoding='utf-8'))['rules']
         rules = []
         for rule_id in ('chat-apps', 'code-editors'):
             rule = dict(next(r for r in shipped if r['id'] == rule_id))
@@ -3709,7 +3714,7 @@ class LayeredDefaultsTests(unittest.TestCase):
 
     def _load_rules(self):
         import unittest.mock as mock
-        import whisper_key.app_rules as ar
+        import syllune.app_rules as ar
         with mock.patch.object(ar, 'get_user_app_data_path', return_value=str(self.dir)):
             return ar.AppRules().rules
 
@@ -3725,7 +3730,7 @@ class LayeredDefaultsTests(unittest.TestCase):
         # An id-less shipped rule could never be overridden or disabled, and a
         # migration would keep re-adding the user's copy of it as a duplicate.
         from ruamel.yaml import YAML
-        path = ROOT / 'src' / 'whisper_key' / 'app_rules.defaults.yaml'
+        path = ROOT / 'src' / 'syllune' / 'app_rules.defaults.yaml'
         with open(path, encoding='utf-8') as f:
             shipped = YAML().load(f)['rules']
         ids = [r.get('id') for r in shipped]
@@ -3811,7 +3816,7 @@ class LayeredDefaultsTests(unittest.TestCase):
     def test_a_broken_package_falls_back_to_the_user_file(self):
         # Losing the shipped file must not throw the user's own rules away.
         import unittest.mock as mock
-        import whisper_key.defaults_merge as dm
+        import syllune.defaults_merge as dm
         self._write('app_rules.yaml', 'format: 2\nrules:\n  - match: ["mytool.exe"]\n')
         with mock.patch.object(dm, 'resolve_asset_path', return_value=str(self.dir / 'nope.yaml')):
             merged, _ = dm.load_layered('nope.yaml', self.dir / 'app_rules.yaml',
@@ -3820,7 +3825,7 @@ class LayeredDefaultsTests(unittest.TestCase):
 
     def test_profiles_active_falls_back_to_the_shipped_default(self):
         import unittest.mock as mock
-        import whisper_key.profiles as pf
+        import syllune.profiles as pf
         with mock.patch.object(pf, 'get_user_app_data_path', return_value=str(self.dir)):
             manager = pf.ProfileManager(config_manager=mock.MagicMock())
         self.assertEqual(manager.active, 'dictation')
@@ -3829,7 +3834,7 @@ class LayeredDefaultsTests(unittest.TestCase):
 
     def test_profiles_migration_preserves_the_active_choice(self):
         import unittest.mock as mock
-        import whisper_key.profiles as pf
+        import syllune.profiles as pf
         self._write('profiles.yaml',
                     'active: code\nprofiles:\n  code:\n    description: Mine\n')
         with mock.patch.object(pf, 'get_user_app_data_path', return_value=str(self.dir)):
@@ -3841,7 +3846,7 @@ class LayeredDefaultsTests(unittest.TestCase):
     def test_transform_override_inherits_the_prompt(self):
         import unittest.mock as mock
         try:
-            import whisper_key.transforms as tr
+            import syllune.transforms as tr
         except ImportError as e:
             self.skipTest(f'transforms needs deps the lean env lacks: {e}')
         self._write('transforms.yaml',
@@ -3861,7 +3866,7 @@ class LayeredDefaultsTests(unittest.TestCase):
         import unittest.mock as mock
         reimport_under(self, fake_platform_modules())
         try:
-            import whisper_key.voice_commands as vc
+            import syllune.voice_commands as vc
         except ImportError as e:
             self.skipTest(f'voice_commands needs deps the lean env lacks: {e}')
         self._write('commands.yaml',
@@ -3874,7 +3879,7 @@ class LayeredDefaultsTests(unittest.TestCase):
         self.assertEqual(swapped['type'], 'maximised')
 
     def test_dispatcher_tests_action_values_not_key_presence(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'voice_commands.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'voice_commands.py').read_text(encoding='utf-8')
         body = source[source.index('def _execute_action'):]
         body = body[:body.index('def ', 10)]
         for key in ('run', 'hotkey', 'type', 'rephrase'):
@@ -3884,7 +3889,7 @@ class LayeredDefaultsTests(unittest.TestCase):
     def test_doctor_reports_the_effective_counts(self):
         # The user file holds overrides only, so counting its entries would tell
         # someone they have 0 rules while five are in force.
-        source = (ROOT / 'src' / 'whisper_key' / 'doctor.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'doctor.py').read_text(encoding='utf-8')
         self.assertIn('rules in effect', source)
         self.assertIn('Voice commands in effect', source)
 
@@ -3902,7 +3907,7 @@ class LayeredDefaultsTests(unittest.TestCase):
         self.assertEqual(chat[0]['match'], ['slack.exe', 'telegram.exe'])
         self.assertEqual([r for r in rules if not r.get('id')], [],
                          'it should have become an override, not a rule of its own')
-        import whisper_key.app_rules as ar
+        import syllune.app_rules as ar
         matcher = ar.AppRules._matches
         self.assertFalse(any(matcher(None, r, 'discord.exe', '') for r in rules),
                          'discord was removed from the list but still matches')
@@ -3925,7 +3930,7 @@ class LayeredDefaultsTests(unittest.TestCase):
         # A list-shaped section must not come back as a dict just because the
         # shipped file is unreadable: the callers iterate it.
         import unittest.mock as mock
-        import whisper_key.defaults_merge as dm
+        import syllune.defaults_merge as dm
         missing = str(self.dir / 'nope.yaml')
         with mock.patch.object(dm, 'resolve_asset_path', return_value=missing):
             commands, _ = dm.load_layered('nope.yaml', self.dir / 'commands.yaml',
@@ -3937,7 +3942,7 @@ class LayeredDefaultsTests(unittest.TestCase):
 
     def test_a_corrupt_shipped_file_does_not_crash_the_loader(self):
         import unittest.mock as mock
-        import whisper_key.defaults_merge as dm
+        import syllune.defaults_merge as dm
         bad = self.dir / 'bad.defaults.yaml'
         bad.write_text('rules:' + LF + '  - match: ["a.exe"' + LF, encoding='utf-8')
         self._write('app_rules.yaml', 'format: 2' + LF + 'rules: []' + LF)
@@ -3962,8 +3967,8 @@ class DefaultInputFollowTests(unittest.TestCase):
                      'faster_whisper', 'playsound3'):
             fakes[name] = _stand_in_module(name)
         reimport_under(self, fakes)
-        from whisper_key.state_manager import StateManager
-        import whisper_key.state_manager as state_manager_module
+        from syllune.state_manager import StateManager
+        import syllune.state_manager as state_manager_module
         sm = StateManager.__new__(StateManager)
         sm.logger = __import__('logging').getLogger('test')
         sm.config_manager = mock.Mock()
@@ -4038,21 +4043,21 @@ class LoginItemRepairTests(unittest.TestCase):
     existed runs Python directly and exits at every login. It is rewritten to go
     through the launcher, once, and only when the tools to build one exist."""
 
-    LAUNCHER = ('Library', 'Application Support', 'Whisper Local', 'Whisper Local.app',
-                'Contents', 'MacOS', 'Whisper Local')
+    LAUNCHER = ('Library', 'Application Support', 'Syllune', 'Syllune.app',
+                'Contents', 'MacOS', 'Syllune')
 
     def _home_with_agent(self, home, args):
         import plistlib
-        path = home / 'Library' / 'LaunchAgents' / 'com.drajb.whisper-local.plist'
+        path = home / 'Library' / 'LaunchAgents' / 'com.loathious.syllune.plist'
         path.parent.mkdir(parents=True)
         with open(path, 'wb') as f:
-            plistlib.dump({'Label': 'com.drajb.whisper-local', 'ProgramArguments': args}, f)
+            plistlib.dump({'Label': 'com.loathious.syllune', 'ProgramArguments': args}, f)
         return path
 
     def _repair(self, args=None, tools_present=True):
         import tempfile
         import unittest.mock as mock
-        from whisper_key import autostart
+        from syllune import autostart
         with tempfile.TemporaryDirectory() as d:
             home = Path(d)
             launcher = home.joinpath(*self.LAUNCHER)
@@ -4074,14 +4079,14 @@ class LoginItemRepairTests(unittest.TestCase):
             return result, enable.call_count, run.call_count
 
     def test_python_agent_is_rewritten_when_the_tools_exist(self):
-        repaired, enabled, _ = self._repair(['/usr/bin/python3', '-m', 'whisper_key.main'])
+        repaired, enabled, _ = self._repair(['/usr/bin/python3', '-m', 'syllune.main'])
         self.assertTrue(repaired)
         self.assertEqual(enabled, 1)
 
     def test_python_agent_is_left_alone_without_the_tools(self):
         # Rewriting it would only produce the same Python command, and a warning
         # on every launch.
-        repaired, enabled, _ = self._repair(['/usr/bin/python3', '-m', 'whisper_key.main'],
+        repaired, enabled, _ = self._repair(['/usr/bin/python3', '-m', 'syllune.main'],
                                             tools_present=False)
         self.assertFalse(repaired)
         self.assertEqual(enabled, 0)
@@ -4094,7 +4099,7 @@ class LoginItemRepairTests(unittest.TestCase):
         # so build the args inside _repair's home by passing a sentinel and
         # rewriting: simplest is to run the real check with a matching home.
         import unittest.mock as mock
-        from whisper_key import autostart
+        from syllune import autostart
         with tempfile.TemporaryDirectory() as d:
             home = Path(d)
             self._home_with_agent(home, [str(home.joinpath(*self.LAUNCHER))])
@@ -4112,7 +4117,7 @@ class LoginItemRepairTests(unittest.TestCase):
         self.assertEqual(ran, 0)
 
     def test_repair_is_wired_into_startup(self):
-        source = (ROOT / 'src' / 'whisper_key' / 'autostart.py').read_text(encoding='utf-8')
+        source = (ROOT / 'src' / 'syllune' / 'autostart.py').read_text(encoding='utf-8')
         body = source[source.index('def repair_if_broken'):]
         self.assertIn('_mac_repair_if_broken()', body[:400],
                       'repair_if_broken() must dispatch to the macOS repair')
@@ -4125,7 +4130,7 @@ class LoginItemRepairTests(unittest.TestCase):
 class OctoberReviewTests(unittest.TestCase):
 
     def _source(self, rel):
-        return (ROOT / 'src' / 'whisper_key' / rel).read_text(encoding='utf-8')
+        return (ROOT / 'src' / 'syllune' / rel).read_text(encoding='utf-8')
 
     # --- the copy/paste chord is Command on a Mac, not Control ---
     def test_copy_and_paste_chords_come_from_the_platform_layer(self):
@@ -4155,7 +4160,7 @@ class OctoberReviewTests(unittest.TestCase):
             fakes[name] = _stand_in_module(name)
         reimport_under(self, fakes)
         import threading
-        from whisper_key.state_manager import StateManager
+        from syllune.state_manager import StateManager
         sm = StateManager.__new__(StateManager)
         sm.logger = __import__('logging').getLogger('test')
         sm._state_lock = threading.Lock()
@@ -4215,7 +4220,7 @@ class OctoberReviewTests(unittest.TestCase):
         for name in ('sounddevice', 'soxr'):
             fakes[name] = _stand_in_module(name)
         reimport_under(self, fakes)
-        from whisper_key.audio_recorder import AudioRecorder
+        from syllune.audio_recorder import AudioRecorder
         rec = AudioRecorder.__new__(AudioRecorder)
         rec.logger = __import__('logging').getLogger('test')
         rec._needs_resampling_cached = False
@@ -4241,7 +4246,7 @@ class OctoberReviewTests(unittest.TestCase):
     def test_clipboard_restore_skips_an_unreadable_original(self):
         import unittest.mock as mock
         reimport_under(self, fake_platform_modules())
-        import whisper_key.clipboard_manager as cmod
+        import syllune.clipboard_manager as cmod
         cm = cmod.ClipboardManager.__new__(cmod.ClipboardManager)
         cm.logger = __import__('logging').getLogger('test')
         cm.paste_preserve_clipboard = True
@@ -4268,46 +4273,46 @@ class OctoberReviewTests(unittest.TestCase):
         return base
 
     def test_light_cleanup_drops_stutters_and_fillers_only(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('um I I think at 2, actually 3', self._cfg()),
                          'I think at 2, actually 3')
 
     def test_medium_cleanup_adds_editing_commands(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('um I I think at 2, actually 3', self._cfg(cleanup='medium')),
                          'I think at 3')
         self.assertEqual(postprocess('book it, scratch that, cancel it', self._cfg(cleanup='medium')),
                          'cancel it')
 
     def test_high_cleanup_adds_smart_formatting(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('mail john at example dot com at 3 pm', self._cfg(cleanup='high')),
                          'mail john@example.com at 3 PM')
 
     def test_no_cleanup_types_what_was_heard(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('um I I think', self._cfg(cleanup='none')), 'um I I think')
 
     def test_an_explicit_toggle_wins_over_its_level(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('um I think', self._cfg(strip_filler_words=False)), 'um I think')
         self.assertEqual(postprocess('at 2, actually 3', self._cfg(backtrack={'enabled': True})),
                          'at 3', 'a pinned true applies even at light')
 
     def test_custom_backtrack_cues_survive_the_level(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = self._cfg(cleanup='medium', backtrack={'enabled': None, 'cues': ['scrap that']})
         self.assertEqual(postprocess('at 2, scrap that 3', cfg), 'at 3')
         self.assertEqual(postprocess('at 2, actually 3', cfg), 'at 2, actually 3',
                          'the default cue list must not come back')
 
     def test_unknown_cleanup_level_falls_back_to_light(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('um I I think', self._cfg(cleanup='maximum')), 'I think')
 
     def test_shipped_defaults_leave_cleanup_toggles_to_the_level(self):
         from ruamel.yaml import YAML
-        with open(ROOT / 'src' / 'whisper_key' / 'config.defaults.yaml', encoding='utf-8') as f:
+        with open(ROOT / 'src' / 'syllune' / 'config.defaults.yaml', encoding='utf-8') as f:
             pp = YAML().load(f)['postprocess']
         self.assertEqual(pp['cleanup'], 'medium')
         for key in ('strip_filler_words', 'remove_repeated_words', 'voice_editing'):
@@ -4318,7 +4323,7 @@ class OctoberReviewTests(unittest.TestCase):
     def test_filler_removal_no_longer_eats_real_words(self):
         # "like" and "you know" were on the filler list; with light cleanup on
         # by default that would have turned "I like it" into "I it" for everyone.
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         self.assertEqual(postprocess('I like it, you know, um, a lot', self._cfg()),
                          'I like it, you know, a lot')
 
@@ -4341,7 +4346,7 @@ class OctoberReviewTests(unittest.TestCase):
     def test_zero_retention_stores_nothing(self):
         import tempfile
         import unittest.mock as mock
-        from whisper_key import transcript_log
+        from syllune import transcript_log
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(transcript_log, 'get_user_app_data_path', return_value=tmp):
             transcript_log.record_transcript('secret', retention_days=0)
@@ -4352,7 +4357,7 @@ class OctoberReviewTests(unittest.TestCase):
         import datetime
         import tempfile
         import unittest.mock as mock
-        from whisper_key import transcript_log
+        from syllune import transcript_log
         old = (datetime.datetime.now() - datetime.timedelta(days=10)).isoformat(timespec='seconds')
         recent = (datetime.datetime.now() - datetime.timedelta(days=1)).isoformat(timespec='seconds')
         with tempfile.TemporaryDirectory() as tmp, \
@@ -4365,7 +4370,7 @@ class OctoberReviewTests(unittest.TestCase):
     def test_no_retention_keeps_everything(self):
         import tempfile
         import unittest.mock as mock
-        from whisper_key import transcript_log
+        from syllune import transcript_log
         with tempfile.TemporaryDirectory() as tmp, \
              mock.patch.object(transcript_log, 'get_user_app_data_path', return_value=tmp):
             self._journal(tmp, [('2020-01-01T00:00:00', 'ancient')])
@@ -4380,14 +4385,27 @@ class OctoberReviewTests(unittest.TestCase):
                          'both delivery paths must honour history.retention_days')
 
     # --- tray and windows ---
-    def test_tray_offers_pause_and_opens_tk_windows_without_a_console(self):
-        tray = self._source('system_tray.py')
-        self.assertIn('"Pause hotkeys"', tray)
-        self.assertIn("self._run_module_in_window('--settings', windowless=True)", tray)
-        self.assertIn("self._run_module_in_window('--history', windowless=True)", tray)
-        self.assertIn('build_relaunch_command', tray,
+    # The tray stays short: everyday actions on top, support tools under Help,
+    # everything else in the hub.
+    def test_tray_menu_is_short_and_keeps_support_tools_under_help(self):
+        from unittest.mock import MagicMock
+        import pystray
+        from syllune.system_tray import SystemTray
+        state = MagicMock()
+        state.get_available_audio_devices.return_value = [{'id': 1, 'name': 'USB mic'}]
+        state.get_recent_transcriptions.return_value = []
+        state.meetings.active = False
+        tray = SystemTray(state, {'enabled': True}, config_manager=MagicMock())
+        menu = tray._create_menu()
+        labels = [item.text for item in menu.items if item is not pystray.Menu.SEPARATOR]
+        self.assertEqual(labels, ['Open Syllune', 'Settings', 'Record a meeting', 'Retry last dictation',
+                                  'Pause hotkeys', 'Microphone', 'Help', 'Restart Syllune', 'Exit'])
+        help_menu = next(item for item in menu.items if item.text == 'Help').submenu
+        self.assertIn('Run diagnostics', [item.text for item in help_menu.items])
+        tray_source = self._source('system_tray.py')
+        self.assertIn("self._run_module_in_window('--settings', windowless=True)", tray_source)
+        self.assertIn('build_relaunch_command', tray_source,
                       'the tray must relaunch the way autostart and Restart do')
-        self.assertIn('"Microphone"', tray)
 
     def test_pause_from_the_tray_goes_through_the_hotkey_listener(self):
         self.assertIn('def toggle_pause', self._source('hotkey_listener.py'))
@@ -4405,7 +4423,7 @@ class OctoberReviewTests(unittest.TestCase):
         import sys as _sys
         code = (
             "import sys; sys.path.insert(0, %r)\n"
-            "from whisper_key.utils import import_ctranslate2_without_optional_backends as f\n"
+            "from syllune.utils import import_ctranslate2_without_optional_backends as f\n"
             "f()\n"
             "print('ctranslate2' in sys.modules, sys.modules.get('torch', 'absent') is None)\n"
         ) % str(ROOT / 'src')
@@ -4436,11 +4454,12 @@ class OctoberReviewTests(unittest.TestCase):
         state = self._source('state_manager.py')
         self.assertIn('Error in processing workflow: {e}", exc_info=True', state)
 
-    def test_log_filename_in_docs_matches_the_app(self):
-        for rel in ('CONTRIBUTING.md', '.github/ISSUE_TEMPLATE/bug_report.yml'):
-            text = (ROOT / rel).read_text(encoding='utf-8')
-            self.assertNotIn('whisperkey.log', text, rel)
-            self.assertIn('app.log', text, rel)
+    # The bug form tells people which tray item makes the log bundle; it has
+    # to name the item the tray really shows.
+    def test_bug_form_names_the_real_log_bundle_item(self):
+        form = (ROOT / '.github/ISSUE_TEMPLATE/bug_report.yml').read_text(encoding='utf-8')
+        self.assertIn('Save logs for a bug report', form)
+        self.assertIn('"Save logs for a bug report"', self._source('system_tray.py'))
 
     # --- every Tk Variable names its window ---
     def test_every_tk_variable_names_its_window(self):
@@ -4452,7 +4471,7 @@ class OctoberReviewTests(unittest.TestCase):
         # first". (#17 was the same bug in the welcome window.)
         import re
         offenders = []
-        for path in sorted((ROOT / 'src' / 'whisper_key').rglob('*.py')):
+        for path in sorted((ROOT / 'src' / 'syllune').rglob('*.py')):
             for n, line in enumerate(path.read_text(encoding='utf-8').splitlines(), 1):
                 if re.search(r'tk\.(String|Boolean|Int|Double)Var\(', line) and 'master=' not in line:
                     offenders.append(f'{path.name}:{n}')
@@ -4487,8 +4506,8 @@ class OctoberReviewTests(unittest.TestCase):
 
     def test_update_notice_matches_how_the_app_was_installed(self):
         import unittest.mock as mock
-        from whisper_key import update_check
-        with mock.patch('whisper_key.brand.repository', return_value='example/syllune'):
+        from syllune import update_check
+        with mock.patch('syllune.brand.repository', return_value='example/syllune'):
             self.assertIn('example/syllune/releases', update_check._how_to_update())
             self.assertNotIn('pip install', update_check._how_to_update())
 
@@ -4500,7 +4519,7 @@ class OctoberReviewTests(unittest.TestCase):
     def test_history_section_hot_reloads_with_postprocess(self):
         import tempfile
         import logging
-        from whisper_key.config_manager import ConfigManager
+        from syllune.config_manager import ConfigManager
         # Exercise the reload rather than pinning an implementation's loop text.
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'settings.yaml'
@@ -4516,9 +4535,9 @@ class OctoberReviewTests(unittest.TestCase):
             self.assertEqual('Works with Åsa', config.get_ai_config()['about_me'])
 
     def test_bundle_redacts_forward_slash_user_paths_too(self):
-        from whisper_key.bundle_logs import _redact
-        self.assertEqual(_redact('file:///C:/Users/rohit/.cache/x'), 'file:///C:/Users/<USER>/.cache/x')
-        self.assertEqual(_redact(r'C:\Users\rohit\AppData'), r'C:\Users\<USER>\AppData')
+        from syllune.bundle_logs import _redact
+        self.assertEqual(_redact('file:///C:/Users/alex/.cache/x'), 'file:///C:/Users/<USER>/.cache/x')
+        self.assertEqual(_redact(r'C:\Users\alex\AppData'), r'C:\Users\<USER>\AppData')
 
     def test_settings_styles_the_readonly_combobox_state(self):
         ui = self._source('settings_ui.py')
@@ -4535,7 +4554,7 @@ class OctoberReviewTests(unittest.TestCase):
 
     # --- stutter removal runs on everyone now: it must keep real doubles ---
     def test_stutter_removal_keeps_emphasis_and_names(self):
-        from whisper_key.dictation_cleanup import remove_repeated_words as strip
+        from syllune.dictation_cleanup import remove_repeated_words as strip
         for kept in ('a long long time ago', 'many many thanks', 'it was fifty fifty',
                      'we flew to Walla Walla', 'Duran Duran played', 'wait wait wait',
                      'that that is fine'):
@@ -4545,7 +4564,7 @@ class OctoberReviewTests(unittest.TestCase):
                          'a sentence-start stutter has a lowercase second copy')
 
     def test_fillers_do_not_bite_hyphenated_words(self):
-        from whisper_key.text_postprocess import postprocess
+        from syllune.text_postprocess import postprocess
         cfg = {'strip_filler_words': True}
         self.assertEqual(postprocess('uh-huh, I see', cfg), 'uh-huh, I see')
         self.assertEqual(postprocess('mm-hmm, uh-oh', cfg), 'mm-hmm, uh-oh')
@@ -4600,7 +4619,7 @@ class WindowsOnArmTests(unittest.TestCase):
     def _vad(self):
         try:
             import numpy  # noqa: F401
-            from whisper_key import voice_activity_detection as vad
+            from syllune import voice_activity_detection as vad
         except ImportError as e:
             self.skipTest(f'needs numpy: {e}')
         return vad
@@ -4648,16 +4667,16 @@ class WindowsOnArmTests(unittest.TestCase):
                 vad._create_ten_vad()
 
     def test_doctor_reports_whether_vad_loads(self):
-        src = (ROOT / 'src' / 'whisper_key' / 'doctor.py').read_text(encoding='utf-8')
+        src = (ROOT / 'src' / 'syllune' / 'doctor.py').read_text(encoding='utf-8')
         self.assertIn('Voice activity detection', src)
         self.assertIn('_create_ten_vad()', src)
 
 
-# ── Wispr Flow parity, October 2026 ──────────────────────────────────────────
-# Three items from Wispr Flow's changelog: a mic that hears nothing is called
+# ── Mic and retry features ──
+# a mic that hears nothing is called
 # out while you're still talking; dictation languages restrict auto-detection
 # and flag speech in another language; the last recording can be retried.
-class WisprOctoberFeatureTests(unittest.TestCase):
+class MicAndRetryFeatureTests(unittest.TestCase):
 
     def _state_manager(self):
         import logging
@@ -4672,7 +4691,7 @@ class WisprOctoberFeatureTests(unittest.TestCase):
                      'faster_whisper', 'faster_whisper.utils', 'playsound3'):
             fakes[name] = _stand_in_module(name)
         reimport_under(self, fakes)
-        from whisper_key.state_manager import StateManager
+        from syllune.state_manager import StateManager
         sm = StateManager.__new__(StateManager)
         sm.logger = logging.getLogger('test')
         sm._state_lock = threading.Lock()
@@ -4716,33 +4735,33 @@ class WisprOctoberFeatureTests(unittest.TestCase):
         sm.system_tray.notify.assert_not_called()
 
     def test_every_recording_start_schedules_the_check(self):
-        src = (ROOT / 'src' / 'whisper_key' / 'state_manager.py').read_text(encoding='utf-8')
+        src = (ROOT / 'src' / 'syllune' / 'state_manager.py').read_text(encoding='utf-8')
         for method in ('def start_rephrase_recording', 'def start_command_recording', 'def _begin_recording'):
             body = src[src.index(method):]
             body = body[:body.index('\n    def ', 10)]
             self.assertIn('self._schedule_silent_mic_check()', body, method)
 
     def test_recorder_tracks_the_peak_of_the_current_recording_only(self):
-        src = (ROOT / 'src' / 'whisper_key' / 'audio_recorder.py').read_text(encoding='utf-8')
+        src = (ROOT / 'src' / 'syllune' / 'audio_recorder.py').read_text(encoding='utf-8')
         start = src[src.index('def start_recording'):]
         start = start[:start.index('\n    def ', 10)]
         self.assertIn('self._recording_peak = 0.0', start, 'reset per recording')
 
     # --- dictation languages ---
     def test_language_list_is_normalized(self):
-        from whisper_key.dictation_languages import normalize_languages
+        from syllune.dictation_languages import normalize_languages
         self.assertEqual(normalize_languages('en, FR fr auto'), ['en', 'fr'])
         self.assertEqual(normalize_languages(['de', 'english', 'x']), ['de'])
         self.assertEqual(normalize_languages(None), [])
 
     def test_detection_stays_inside_the_users_languages(self):
-        from whisper_key.dictation_languages import choose_language
+        from syllune.dictation_languages import choose_language
         # Whisper's own top guess (Welsh) is ignored; French is the best listed one.
         self.assertEqual(choose_language({'en': .1, 'fr': .3, 'cy': .55}, ['en', 'fr']), ('fr', None))
         self.assertEqual(choose_language({'en': .9}, ['en']), ('en', None))
 
     def test_confident_speech_in_another_language_is_flagged(self):
-        from whisper_key.dictation_languages import choose_language
+        from syllune.dictation_languages import choose_language
         self.assertEqual(choose_language({'en': .05, 'fr': .1, 'de': .85}, ['en', 'fr']), ('fr', 'de'))
         self.assertEqual(choose_language({'en': .2, 'fr': .25, 'de': .5}, ['en', 'fr'])[1], None,
                          'a weak guess is not worth a notice')
@@ -4758,7 +4777,7 @@ class WisprOctoberFeatureTests(unittest.TestCase):
         fake_fw = _stand_in_module('faster_whisper')
         fakes['faster_whisper'] = fake_fw
         reimport_under(self, fakes)
-        from whisper_key import whisper_engine as we
+        from syllune import whisper_engine as we
         eng = we.WhisperEngine.__new__(we.WhisperEngine)
         eng.logger = __import__('logging').getLogger('test')
         eng.model = mock.Mock()
@@ -4788,7 +4807,7 @@ class WisprOctoberFeatureTests(unittest.TestCase):
         except Exception as e:
             self.skipTest(f'no Tk: {e}')
         try:
-            from whisper_key.settings_ui import _coerce
+            from syllune.settings_ui import _coerce
             var = tk.StringVar(master=root, value='en, fr')
             self.assertEqual(_coerce(var, 'en, fr', 'whisper.languages'), ['en', 'fr'])
             self.assertEqual(_coerce(var, '', 'whisper.languages'), [])
@@ -4796,7 +4815,7 @@ class WisprOctoberFeatureTests(unittest.TestCase):
             root.destroy()
 
     def test_whisper_cpp_engine_mirrors_the_language_api(self):
-        src = (ROOT / 'src' / 'whisper_key' / 'whisper_engine_cpp.py').read_text(encoding='utf-8')
+        src = (ROOT / 'src' / 'syllune' / 'whisper_engine_cpp.py').read_text(encoding='utf-8')
         self.assertIn('languages: Optional[list] = None', src)
         self.assertIn('def _language_from_allowed', src)
         self.assertIn('auto_detect_language', src)
@@ -4826,12 +4845,12 @@ class WisprOctoberFeatureTests(unittest.TestCase):
         self.assertFalse(sm.is_processing, 'must release the busy flag')
 
     def test_tray_offers_retry(self):
-        src = (ROOT / 'src' / 'whisper_key' / 'system_tray.py').read_text(encoding='utf-8')
+        src = (ROOT / 'src' / 'syllune' / 'system_tray.py').read_text(encoding='utf-8')
         self.assertIn('"Retry last dictation"', src)
         self.assertIn('has_last_recording()', src)
 
     def test_pipeline_keeps_the_last_recording_in_memory_only(self):
-        src = (ROOT / 'src' / 'whisper_key' / 'state_manager.py').read_text(encoding='utf-8')
+        src = (ROOT / 'src' / 'syllune' / 'state_manager.py').read_text(encoding='utf-8')
         self.assertIn('self._last_audio = audio_data', src)
         body = src[src.index('def retry_last_dictation'):]
         body = body[:body.index('# Types the last dictation again')]

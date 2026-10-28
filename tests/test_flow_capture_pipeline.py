@@ -8,8 +8,8 @@ import contextlib
 import io
 from unittest.mock import Mock, patch
 import numpy as np
-from whisper_key.state_manager import StateManager
-from whisper_key.transcript_log import load_transcripts
+from syllune.state_manager import StateManager
+from syllune.transcript_log import load_transcripts
 
 
 class CapturePipelineTests(unittest.TestCase):
@@ -18,10 +18,10 @@ class CapturePipelineTests(unittest.TestCase):
         quiet.__enter__(); self.addCleanup(quiet.__exit__, None, None, None)
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        context = patch('whisper_key.transcript_log.get_user_app_data_path', return_value=folder.name)
+        context = patch('syllune.transcript_log.get_user_app_data_path', return_value=folder.name)
         context.start(); self.addCleanup(context.stop)
         for name in ('record_transcription', 'audit_record'):
-            context = patch(f'whisper_key.state_manager.{name}')
+            context = patch(f'syllune.state_manager.{name}')
             context.start(); self.addCleanup(context.stop)
         s = self.state = object.__new__(StateManager)
         s._state_lock = threading.Lock()

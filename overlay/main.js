@@ -34,6 +34,16 @@ const argValue = (name) => {
 };
 const notesDir = argValue('--notes-dir') || path.join(app.getPath('home'), 'Voice Notes');
 
+// Your data (settings, history, recordings) is the engine's folder; the
+// window's own browser storage and icon cache live apart from it, so the data
+// folder holds only your files. The installed app starts the window before
+// the engine, so the defaults match the engine's own.
+const dataDir = argValue('--data-dir') || path.join(app.getPath('appData'), brand.name);
+const cacheDir = argValue('--cache-dir') || (process.platform === 'win32'
+  ? path.join(process.env.LOCALAPPDATA || app.getPath('appData'), brand.name)
+  : path.join(app.getPath('home'), 'Library', 'Caches', brand.name));
+app.setPath('userData', cacheDir);
+
 let pill = null;
 let hub = null;
 let engine = null;               // socket to the Python engine
@@ -49,6 +59,9 @@ let reducedMotion = false;
 let dragSession = null;
 let previewWindows = [];
 let previewDisplayId = null;
+let previewHideTimer = null;     // previews fade out before their windows hide
+let previewReleaseTimer = null;  // previews are freed a while after the last hover
+let dockSwitch = null;           // {display, timer} while the pill fades out of its old dock
 
 // A destroyed window object stays non-null until its 'closed' event, and any
 // call on it throws; every timer and message path checks this first.
@@ -61,7 +74,7 @@ if (!app.requestSingleInstanceLock()) app.quit();
 // modal error box, which a 20 Hz timer reopens the moment it is closed. Each
 // distinct error is written once next to app.log instead.
 
-const ERROR_LOG = path.join(app.getPath('appData'), 'whisperkey', 'overlay-errors.log');
+const ERROR_LOG = path.join(dataDir, 'overlay-errors.log');
 const loggedErrors = new Set();
 process.on('uncaughtException', (error) => {
   const text = String(error?.stack || error);
@@ -74,6 +87,7 @@ process.on('uncaughtException', (error) => {
 // landing in between must not touch them.
 function quit(code = 0) {
   quitting = true;
+  clearTimeout(dockSwitch?.timer);
   clearDockPreviews();
   stopHoverPoll();
   clearInterval(moveTimer);
@@ -117,8 +131,8 @@ app.on('before-quit', () => {
 
 function createPill() {
   pill = new BrowserWindow({
-    width: docks.WINDOW_LENGTH,
-    height: docks.WINDOW_CROSS,
+    width: docks.WINDOW_WIDTH,
+    height: docks.WINDOW_HEIGHT,
     transparent: true,
     frame: false,
     resizable: false,
@@ -148,10 +162,12 @@ function createPill() {
   // A pill that closes while the engine still runs (a renderer crash, or
   // Windows closing it) comes back; a crashed page alone just reloads.
   pill.on('closed', () => {
+    clearTimeout(dockSwitch?.timer);
+    dockSwitch = null;
     clearDockPreviews();
     dragSession = null;
     pill = null;
-    hitRect = null;
+    hitRects = null;
     hovering = false;
     stopHoverPoll();
     clearInterval(moveTimer);
@@ -181,32 +197,79 @@ function hidePillWindowIfIdle() {
 }
 
 // Follows the monitor the cursor is on, so the pill appears where you look.
-// Three spots: bottom center, or the middle of the left or right edge. On a
-// side the window hugs that edge and pill.html draws the pill against it.
-function placePill(smooth = false, display = null) {
+// Three spots: bottom center, or the middle of the left or right edge. The
+// window never changes size, so placing it is a pure move: a short glide on
+// the same monitor, an instant jump to another one (gliding across the gap
+// between monitors would only look like a glitch). A change of dock goes
+// through switchDock below instead.
+function placePill(smooth = false, display = null, config = {}) {
   if (!alive(pill)) return;
   display ||= screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const target = docks.pillBounds(position, display.workArea);
   clearInterval(moveTimer);
-  const previous = pill.getBounds();
-  // Resize before the settle: canvas orientation and native hit testing agree.
-  if (previous.width !== target.width || previous.height !== target.height) hitRect = null;
-  pill.setBounds({...previous, width: target.width, height: target.height});
-  sendPillConfig();
-  if (smooth && !reducedMotion && !gameMode && (previous.x !== target.x || previous.y !== target.y)) {
-    const since = Date.now();
-    moveTimer = setInterval(() => {
-      if (!alive(pill)) { clearInterval(moveTimer); return; }
-      const t = Math.min(1, (Date.now() - since) / 180), ease = 1 - (1 - t) ** 3;
-      pill.setBounds({...target, x: Math.round(previous.x + (target.x - previous.x) * ease), y: Math.round(previous.y + (target.y - previous.y) * ease)});
-      if (t === 1) clearInterval(moveTimer);
-    }, 16);
-  } else pill.setBounds(target);
-  sendPillConfig();
+  const from = pill.getBounds();
+  sendPillConfig(config);
+  if (from.width !== target.width || from.height !== target.height) {
+    hitRects = null;
+    pill.setBounds(target);
+    return;
+  }
+  const sameDisplay = screen.getDisplayMatching(from).id === display.id;
+  if (!smooth || reducedMotion || gameMode || !sameDisplay) pill.setPosition(target.x, target.y);
+  else glideWindow(target, docks.glideMs(Math.hypot(target.x - from.x, target.y - from.y)));
 }
 
-function sendPillConfig() {
-  sendToPill('config', { idlePill, gameMode, meetingSince, pendingCount, align: position.split('-')[1] });
+// Moves the pill window to a point with the shared ease-out curve.
+const GLIDE_TICK_MS = 8;             // finer than any refresh rate, so no visible steps
+function glideWindow(target, duration) {
+  clearInterval(moveTimer);
+  const from = pill.getBounds();
+  if (Math.hypot(target.x - from.x, target.y - from.y) < 1) return;
+  const since = Date.now();
+  moveTimer = setInterval(() => {
+    if (!alive(pill)) { clearInterval(moveTimer); return; }
+    const t = Math.min(1, (Date.now() - since) / duration), ease = docks.easeOut(t);
+    pill.setPosition(Math.round(from.x + (target.x - from.x) * ease), Math.round(from.y + (target.y - from.y) * ease));
+    if (t === 1) clearInterval(moveTimer);
+  }, GLIDE_TICK_MS);
+}
+
+// --- Changing docks ----------------------------------------------------------
+// The pill sits in a different spot of its window on each dock, so a dock
+// change can't be one glide: moving the drawing inside the window while the
+// window moves makes the two land on screen in different frames, and the
+// pill shakes. Instead the pill glides toward the spot it was dropped on while
+// it fades out, the window jumps once nothing is drawn, and the pill grows in
+// at the new edge (pill.html, arrive()).
+const DOCK_LEAVE_MS = 150;
+const DOCK_LEAVE_TIMEOUT_MS = 400;   // a renderer that never answers can't strand the pill
+
+function switchDock(next, display = null, aim = null) {
+  if (!alive(pill)) return;
+  clearTimeout(dockSwitch?.timer);
+  position = next;
+  dockSwitch = {display, timer: setTimeout(finishDockSwitch, DOCK_LEAVE_TIMEOUT_MS)};
+  sendToPill('dock-leave');
+  if (aim && !reducedMotion && !gameMode) {
+    const bounds = pill.getBounds();
+    glideWindow({x: bounds.x + Math.round(aim.x), y: bounds.y + Math.round(aim.y)}, DOCK_LEAVE_MS);
+  }
+}
+
+function finishDockSwitch() {
+  if (!dockSwitch) return;
+  const {display, timer} = dockSwitch;
+  clearTimeout(timer);
+  dockSwitch = null;
+  placePill(false, display, {arrive: true});
+}
+
+ipcMain.on('pill:dock-left', (event) => {
+  if (alive(pill) && event.sender === pill.webContents) finishDockSwitch();
+});
+
+function sendPillConfig(extra = {}) {
+  sendToPill('config', { idlePill, gameMode, meetingSince, pendingCount, dock: position, ...extra });
 }
 
 // --- Pill hover ------------------------------------------------------------
@@ -216,13 +279,18 @@ function sendPillConfig() {
 // low-level mouse hook that every mouse event would pass through.
 
 const HOVER_POLL_MS = 50;
-let hitRect = null;              // clickable area in window coordinates, from the renderer
+let hitRects = null;             // clickable rectangles in window coordinates, from the renderer
 let hovering = false;
 let hoverTimer = null;
 
 function setPillHover(inside) {
   if (inside === hovering || !alive(pill)) return;
   hovering = inside;
+  // A hover is the moment before a drag: have the previews ready by then,
+  // and free them again once the pill has been left alone for a while.
+  clearTimeout(previewReleaseTimer);
+  if (inside && !gameMode) prepareDockPreviews(screen.getDisplayMatching(pill.getBounds()));
+  if (!inside) previewReleaseTimer = setTimeout(() => { if (!dragSession) clearDockPreviews(); }, PREVIEW_RELEASE_MS);
   pill.setIgnoreMouseEvents(!inside);
   pill.webContents.send('hover', inside);
 }
@@ -235,21 +303,22 @@ function stopHoverPoll() {
 function pollHover() {
   // Captured drags keep receiving pointer-up even after leaving the old shape.
   if (dragSession) { setPillHover(true); return; }
-  if (!alive(pill) || !hitRect || gameMode || !pill.isVisible()) {
+  if (!alive(pill) || !hitRects || gameMode || !pill.isVisible()) {
     setPillHover(false);
     return;
   }
   const cursor = screen.getCursorScreenPoint();
   const bounds = pill.getBounds();
   const x = cursor.x - bounds.x, y = cursor.y - bounds.y;
-  setPillHover(x >= hitRect.x && x <= hitRect.x + hitRect.w && y >= hitRect.y && y <= hitRect.y + hitRect.h);
+  setPillHover(hitRects.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h));
 }
 
-ipcMain.on('pill:hit-rect', (_e, rect) => {
+const isRect = (r) => r && ['x', 'y', 'w', 'h'].every((key) => Number.isFinite(r[key]));
+ipcMain.on('pill:hit-rect', (_e, rects) => {
   if (!alive(pill) || _e.sender !== pill.webContents) return;
-  hitRect = rect;
-  if (rect && !hoverTimer) hoverTimer = setInterval(pollHover, HOVER_POLL_MS);
-  if (!rect && hoverTimer) {
+  hitRects = Array.isArray(rects) && rects.length && rects.length <= 4 && rects.every(isRect) ? rects : null;
+  if (hitRects && !hoverTimer) hoverTimer = setInterval(pollHover, HOVER_POLL_MS);
+  if (!hitRects && hoverTimer) {
     stopHoverPoll();
     setPillHover(false);
   }
@@ -261,56 +330,78 @@ ipcMain.on('pill:settled', (_e, settled) => {
   hidePillWindowIfIdle();
 });
 
-// Clicks on the pill: dictate, stop, cancel.
+// Clicks on the pill: dictate, stop, cancel, meetings and the hub.
 ipcMain.on('pill:action', (_e, action) => {
   if (!alive(pill) || _e.sender !== pill.webContents) return;
-  if (!['dictate', 'stop', 'cancel', 'meeting_stop', 'meeting_open', 'open_hub', 'pending_open'].includes(action)) return;
+  if (!['dictate', 'stop', 'cancel', 'meeting_start', 'meeting_stop', 'meeting_open', 'open_hub', 'pending_open'].includes(action)) return;
   engine?.write(JSON.stringify({ type: 'action', action }) + '\n');
 });
 
-// Only deliberate renderer drags create these three small, noninteractive
-// windows. The monitor-sized desktop never becomes an invisible input layer.
+// Three small, click-through windows mark the docks while you drag. They are
+// created (hidden) when the cursor first reaches the pill, because creating a
+// window mid-drag stalls the main process and makes the pill stutter, and
+// freed again once the pill has been left alone. They are only ever shown
+// during a drag; the desktop never gets an input layer.
+const PREVIEW_FADE_MS = 180;
+const PREVIEW_RELEASE_MS = 20000;
+
 function clearDockPreviews() {
+  clearTimeout(previewHideTimer);
   for (const preview of previewWindows) if (alive(preview)) preview.destroy();
   previewWindows = [];
   previewDisplayId = null;
 }
 
-function showDockPreviews(display, selected) {
-  if (previewDisplayId !== display.id) {
-    clearDockPreviews();
-    previewDisplayId = display.id;
-    previewWindows = docks.POSITIONS.map((dock) => {
-      const rect = docks.dockBounds(dock, display.workArea);
-      const preview = new BrowserWindow({
-        ...rect, transparent: true, frame: false, focusable: false, skipTaskbar: true,
-        resizable: false, movable: false, hasShadow: false, show: false,
-        webPreferences: {preload: path.join(__dirname, 'dock-preview-preload.js'), sandbox: true},
-      });
-      preview.dockPosition = dock;
-      preview.setIgnoreMouseEvents(true);
-      preview.setAlwaysOnTop(true, 'screen-saver');
-      preview.setVisibleOnAllWorkspaces(true);
-      preview.loadFile(path.join(__dirname, 'dock-preview.html'), {query:{position:dock}});
-      preview.once('ready-to-show', () => {
-        if (!dragSession || !alive(preview)) return;
-        preview.webContents.send('dock:highlight', dragSession.selected === dock);
-        preview.showInactive();
-      });
-      return preview;
+// The previews fade out (dock-preview.html) and hide once they are invisible.
+function hideDockPreviews() {
+  clearTimeout(previewHideTimer);
+  const shown = previewWindows.filter((preview) => alive(preview) && preview.isVisible());
+  for (const preview of shown) preview.webContents.send('dock:highlight', null);
+  previewHideTimer = setTimeout(() => {
+    for (const preview of shown) if (alive(preview)) preview.hide();
+  }, PREVIEW_FADE_MS);
+}
+
+function prepareDockPreviews(display) {
+  if (previewDisplayId === display.id && previewWindows.length && previewWindows.every(alive)) return;
+  clearDockPreviews();
+  previewDisplayId = display.id;
+  previewWindows = docks.POSITIONS.map((dock) => {
+    const preview = new BrowserWindow({
+      ...docks.dockBounds(dock, display.workArea), transparent: true, frame: false, focusable: false,
+      skipTaskbar: true, resizable: false, movable: false, hasShadow: false, show: false,
+      webPreferences: {preload: path.join(__dirname, 'dock-preview-preload.js'), sandbox: true},
     });
+    preview.dockPosition = dock;
+    preview.setIgnoreMouseEvents(true);
+    preview.setAlwaysOnTop(true, 'screen-saver');
+    preview.setVisibleOnAllWorkspaces(true);
+    preview.loadFile(path.join(__dirname, 'dock-preview.html'));
+    return preview;
+  });
+}
+
+function showDockPreviews(display, selected) {
+  clearTimeout(previewHideTimer);
+  prepareDockPreviews(display);
+  let shownNow = false;
+  for (const preview of previewWindows) {
+    if (!alive(preview)) continue;
+    preview.webContents.send('dock:highlight', preview.dockPosition === selected);
+    if (!preview.isVisible()) { preview.showInactive(); shownNow = true; }
   }
-  for (const preview of previewWindows) if (alive(preview)) preview.webContents.send('dock:highlight', preview.dockPosition === selected);
+  // The pill you are holding stays above the spots it can be dropped on.
+  if (shownNow && alive(pill)) pill.moveTop();
 }
 
 function cancelPillDrag() {
   const session = dragSession;
   dragSession = null;
-  clearDockPreviews();
+  hideDockPreviews();
   if (session && alive(pill)) {
     position = session.position;
     const display = screen.getDisplayMatching(session.bounds);
-    placePill(false, display);
+    placePill(true, display);
     sendToPill('drag-cancelled');
   }
 }
@@ -321,7 +412,7 @@ ipcMain.on('pill:motion', (event, reduce) => {
 
 // Screen deltas avoid feedback as the native window follows the pointer.
 ipcMain.on('pill:drag', (event, delta) => {
-  if (!alive(pill) || event.sender !== pill.webContents || gameMode) return;
+  if (!alive(pill) || event.sender !== pill.webContents || gameMode || dockSwitch) return;
   if (!delta || !Number.isFinite(delta.x) || !Number.isFinite(delta.y) || Math.abs(delta.x) > 1000 || Math.abs(delta.y) > 1000) return;
   clearInterval(moveTimer);
   const bounds = pill.getBounds();
@@ -336,16 +427,22 @@ ipcMain.on('pill:drag', (event, delta) => {
 });
 // Release commits the last highlighted offer, so pointer movement during an
 // IPC round trip cannot silently choose a different dock from the preview.
-ipcMain.on('pill:drag-end', (event) => {
+// A drop on the same dock glides back; a drop on another one aims the fading
+// pill at the preview it was dropped on (center: the pill's centre in window
+// coordinates, as the renderer draws it).
+ipcMain.on('pill:drag-end', (event, center) => {
   if (!alive(pill) || event.sender !== pill.webContents || !dragSession) return;
-  const {selected:snapped, display} = dragSession;
+  const {selected, display} = dragSession;
   dragSession = null;
-  clearDockPreviews();
-  if (snapped !== position) {
-    position = snapped;
-    engine?.write(JSON.stringify({type: 'action', action: 'pill_position', position: snapped}) + '\n');
+  hideDockPreviews();
+  if (selected === position) { placePill(true, display); return; }
+  engine?.write(JSON.stringify({type: 'action', action: 'pill_position', position: selected}) + '\n');
+  let aim = null;
+  if (center && Number.isFinite(center.x) && Number.isFinite(center.y)) {
+    const bounds = pill.getBounds(), slot = docks.dockBounds(selected, display.workArea);
+    aim = {x: slot.x + slot.width / 2 - (bounds.x + center.x), y: slot.y + slot.height / 2 - (bounds.y + center.y)};
   }
-  placePill(true, display);
+  switchDock(selected, display, aim);
 });
 ipcMain.on('pill:drag-cancel', event => {
   if (alive(pill) && event.sender === pill.webContents) cancelPillDrag();
@@ -396,8 +493,7 @@ function handle(msg) {
     case 'config':
       if (docks.POSITIONS.includes(msg.position) && msg.position !== position) {
         cancelPillDrag();
-        position = msg.position;
-        placePill();
+        switchDock(msg.position);
       }
       if ('idle_pill' in msg) idlePill = !!msg.idle_pill;
       sendPillConfig();
@@ -489,12 +585,12 @@ ipcMain.handle('hub:call', (e, method, params) => {
 });
 
 function callEngine(method, params) {
-  if (!engine || engine.destroyed) return { ok: false, error: "Whisper Local isn't running" };
+  if (!engine || engine.destroyed) return { ok: false, error: "Syllune isn't running" };
   const id = ++lastCallId;
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pendingCalls.delete(id);
-      resolve({ ok: false, error: 'Whisper Local took too long to answer' });
+      resolve({ ok: false, error: 'Syllune took too long to answer' });
     }, CALL_TIMEOUT_MS);
     pendingCalls.set(id, (reply) => {
       clearTimeout(timer);
@@ -511,8 +607,7 @@ ipcMain.handle('hub:audio-source', async (event, kind, id, track) => {
   const reply = await callEngine('audio_source', {kind, entry_id: id, track});
   if (!reply.ok) throw new Error(reply.error);
   const full = fs.realpathSync(reply.result.path);
-  const dataRoot = path.join(app.getPath('appData'), 'whisperkey');
-  const folder = fs.realpathSync(path.join(dataRoot, kind === 'dictation' ? 'dictation_audio' : 'meetings'));
+  const folder = fs.realpathSync(path.join(dataDir, kind === 'dictation' ? 'dictation_audio' : 'meetings'));
   const relative = path.relative(folder, full);
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.extname(full).toLowerCase() !== '.wav' || !fs.statSync(full).isFile()) throw new Error('Invalid recording');
   return pathToFileURL(full).href;

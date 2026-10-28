@@ -43,7 +43,7 @@ py -3.12 -m venv .venv
 cd overlay
 npm ci
 cd ..
-.\.venv\Scripts\python.exe -m whisper_key.main
+.\.venv\Scripts\python.exe -m syllune.main
 ```
 
 Build the complete installer:
@@ -52,4 +52,4 @@ Build the complete installer:
 powershell -File packaging\windows\build.ps1
 ```
 
-The script creates `dist/syllune/Syllune-Setup-<version>-x64.exe` and its SHA-256 checksum. It never publishes automatically. GPU libraries are optional and are not part of the minimal CPU installer. Source users can use the existing GPU setup documentation and keep CUDA in the private environment.
+The script creates `dist/syllune/Syllune-Setup-<version>-x64.exe` and its SHA-256 checksum. It never publishes automatically. GPU libraries are optional and are not part of the minimal CPU installer. Source users who want GPU speed can install the CUDA 12 libraries into this checkout's `.venv`.

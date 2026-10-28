@@ -119,8 +119,6 @@ user-testing/
 # Build configuration (user-specific paths)
 pyinstaller-build/build-config*.json
 !pyinstaller-build/build-config.example.json
-pyapp-build/build-config.json
-!pyapp-build/build-config.example.json
 
 # Temporary working files
 .temp/
@@ -133,8 +131,7 @@ CLAUDE.local.md
 .claude/worktrees/
 
 # Personal launcher scripts (user-local, not part of the repo)
-start_whisper_key.vbs
-start_whisper_local.vbs
+start_syllune.vbs
 
 # Personal AI-assistant scaffolding extracted into this working copy. Not part
 # of the product; ignored so a `git add -A` can never publish it to the repo.

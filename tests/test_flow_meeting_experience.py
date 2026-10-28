@@ -10,8 +10,8 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from whisper_key.meetings import MeetingController, MeetingStore, READY, build_transcript
-from whisper_key.meeting_recorder import MeetingRecorder
+from syllune.meetings import MeetingController, MeetingStore, READY, build_transcript
+from syllune.meeting_recorder import MeetingRecorder
 
 
 class MeetingExperienceTests(unittest.TestCase):
@@ -36,8 +36,8 @@ class MeetingExperienceTests(unittest.TestCase):
         return path
 
     def process(self):
-        with patch('whisper_key.meetings.build_transcript', return_value=self.result), \
-                patch('whisper_key.meetings.summarize', return_value=None):
+        with patch('syllune.meetings.build_transcript', return_value=self.result), \
+                patch('syllune.meetings.summarize', return_value=None):
             self.controller._process(self.meeting)
 
     def test_retains_both_original_tracks_and_chunked_playback(self):
@@ -60,8 +60,8 @@ class MeetingExperienceTests(unittest.TestCase):
             self.assertEqual(self.turns, saved['turns'])
             self.assertTrue(Path(saved['transcript_exports']['conversation']['path']).exists())
             raise RuntimeError('Model unavailable')
-        with patch('whisper_key.meetings.build_transcript', return_value=self.result), \
-                patch('whisper_key.meetings.summarize', side_effect=fail_summary):
+        with patch('syllune.meetings.build_transcript', return_value=self.result), \
+                patch('syllune.meetings.summarize', side_effect=fail_summary):
             self.controller._process(self.meeting)
         saved = self.store.load(self.meeting['id'])
         self.assertEqual(READY, saved['status'])
@@ -73,7 +73,7 @@ class MeetingExperienceTests(unittest.TestCase):
         engine.transcribe_timed.side_effect = lambda audio, **_: {'language': 'en', 'words': [(len(audio) / 16000 - .3, len(audio) / 16000, ' final')]}
         mic = np.full(16000 * 66, .0001, dtype=np.float32)
         system = np.full(16000 * 70, .0002, dtype=np.float32)
-        with patch('whisper_key.speaker_diarization.available', return_value=False):
+        with patch('syllune.speaker_diarization.available', return_value=False):
             result = build_transcript(mic, system, engine)
         self.assertEqual([len(system), len(mic)], [len(call.args[0]) for call in engine.transcribe_timed.call_args_list])
         self.assertEqual(70, max(turn['end'] for turn in result['turns']))
@@ -81,7 +81,7 @@ class MeetingExperienceTests(unittest.TestCase):
     def test_subsecond_quiet_voiced_track_is_not_dropped(self):
         engine = Mock()
         engine.transcribe_timed.return_value = {'language': 'en', 'words': [(0, .2, ' yes')]}
-        with patch('whisper_key.speaker_diarization.available', return_value=False):
+        with patch('syllune.speaker_diarization.available', return_value=False):
             result = build_transcript(np.full(3200, .0001, dtype=np.float32), None, engine)
         self.assertEqual('yes', result['turns'][0]['text'])
 
@@ -161,7 +161,7 @@ class MeetingExperienceTests(unittest.TestCase):
             recorder.folder = folder
             recorder.start.side_effect = fail_start
             return recorder
-        with patch('whisper_key.meeting_recorder.MeetingRecorder', side_effect=create_recorder):
+        with patch('syllune.meeting_recorder.MeetingRecorder', side_effect=create_recorder):
             with self.assertRaises(RuntimeError):
                 self.controller.start_meeting()
         failed = [m for m in self.store.all() if m['id'] != self.meeting['id']]
@@ -170,7 +170,7 @@ class MeetingExperienceTests(unittest.TestCase):
         self.assertTrue(self.store.has_audio(failed[0]['id']))
 
     def test_unrecognized_existing_transcript_file_is_preserved(self):
-        from whisper_key.meeting_transcripts import write_transcripts
+        from syllune.meeting_transcripts import write_transcripts
         self.meeting.update(self.result)
         folder = self.root / 'notes' / 'Transcripts' / self.meeting['id']
         folder.mkdir(parents=True)

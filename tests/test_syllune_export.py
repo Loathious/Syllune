@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from whisper_key.state_manager import _OVERLAY_DIR, _is_own_window
+from syllune.state_manager import _OVERLAY_DIR, _is_own_window
 
 import importlib.util
 _spec = importlib.util.spec_from_file_location(

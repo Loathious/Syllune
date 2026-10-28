@@ -3,7 +3,7 @@ import unittest
 import contextlib
 import io
 from unittest.mock import Mock, patch
-from whisper_key.clipboard_manager import ClipboardManager
+from syllune.clipboard_manager import ClipboardManager
 
 
 class DeliverySemanticsTests(unittest.TestCase):
@@ -22,9 +22,9 @@ class DeliverySemanticsTests(unittest.TestCase):
         manager.paste_pre_paste_delay = manager.paste_clipboard_restore_delay = 0
         manager.paste_keys = ['ctrl', 'v']
         manager.copy_text = Mock(return_value=True)
-        with patch('whisper_key.clipboard_manager.pyperclip.paste', return_value='original'), \
-             patch('whisper_key.clipboard_manager.pyperclip.copy', side_effect=OSError('restore failed')), \
-             patch('whisper_key.clipboard_manager.keyboard.send_hotkey') as paste, \
+        with patch('syllune.clipboard_manager.pyperclip.paste', return_value='original'), \
+             patch('syllune.clipboard_manager.pyperclip.copy', side_effect=OSError('restore failed')), \
+             patch('syllune.clipboard_manager.keyboard.send_hotkey') as paste, \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertTrue(manager._clipboard_paste('Hello.'))
             paste.assert_called_once()

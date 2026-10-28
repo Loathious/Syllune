@@ -1,6 +1,6 @@
-Local faster-whisper speech-to-text app with global hotkeys for Windows 10+ and macOS
+Syllune: local dictation, a floating voice pill and private meeting notes, for Windows 10+ (macOS code paths kept)
 
-Open-source project maintained as `drajb/whisper-local` by Rohit Burani. Internal Python module name remains `whisper_key`; the config directory remains `%APPDATA%\whisperkey` (`~/.whisperkey` on macOS).
+Proprietary product by Loathious (LICENSE; third-party notices in THIRD_PARTY_NOTICES.md). Python package `syllune` (engine), Electron app in `overlay/` (pill + hub). Data lives in `%APPDATA%\Syllune`.
 
 - Start here: `state_manager.py` coordinates all components workflow
 
@@ -38,7 +38,7 @@ Open-source project maintained as `drajb/whisper-local` by Rohit Burani. Interna
 | **Terminal Title** | `terminal_title.py` | Animated terminal tab title reflecting app state | - |
 | **Level Overlay** | `level_overlay.py` | Floating level meter + streaming text pill | tkinter |
 | **Fallback Window** | `fallback_window.py` | Capture window when no text field is focused | tkinter |
-| **Transforms** | `transforms.py` | Wispr-style AI text transforms via Ollama | ruamel.yaml |
+| **Transforms** | `transforms.py` | AI text transforms via Ollama | ruamel.yaml |
 | **Dictionary** | `dictionary.py` | Hotword add/remove/list + add-word dialog | tkinter, ruamel.yaml |
 | **Profiles** | `profiles.py` | Dictation/Chat/Code/Notes/Translate presets | ruamel.yaml |
 | **Per-App Rules** | `app_rules.py` | Foreground-app-specific behaviour overrides | ruamel.yaml |
@@ -71,15 +71,17 @@ Open-source project maintained as `drajb/whisper-local` by Rohit Burani. Interna
 ## Project Structure
 
 ```
-whisper-local/
-├── whisper-local.py                   # Development wrapper script
-├── pyproject.toml                     # Dependencies & PyPI config
+Syllune/
+├── start-syllune.py                   # Development launcher (start-syllune.cmd wraps it)
+├── pyproject.toml                     # Python dependencies
+├── overlay/                           # Electron pill + hub (package.json builds the installer)
+├── packaging/windows/                 # Installer build (build.ps1)
 ├── CLAUDE.md                          # Claude AI project instructions
 ├── README.md                          # Project documentation
 ├── CHANGELOG.md                       # Version history and changes
 │
 ├── src/
-│   └── whisper_key/                   # Python package
+│   └── syllune/                   # Python package
 │       ├── __init__.py                # Package initialization
 │       ├── main.py                    # Main application entry point
 │       ├── config.defaults.yaml       # Default configuration template
@@ -118,18 +120,11 @@ whisper-local/
 ├── docs/                              # Project documentation
 │   ├── project-index.md
 │   ├── voice-commands.md              # Voice commands user guide
-│   ├── design/                        # Design docs
-│   ├── plans/                         # Planning docs
-│   ├── research/                      # Research docs
-│   ├── roadmap/                       # Feature roadmap & user stories
-│   │   ├── roadmap.md                 # Active feature roadmap
-│   │   └── completed.md               # Completed user stories
-│   └── ...
+│   └── syllune-*.md                   # Install, privacy, release, troubleshooting
 │
-├── .temp/                             # Temporary working files (gitignored)
-└── pyapp-build/                       # pyapp build script and config
+└── .temp/                             # Temporary working files (gitignored)
 ```
 
 ---
 
-*Last Updated: 2026-10-07 | Project Status: Active Development*
+*Last Updated: 2026-10-28 | Project Status: Active Development*

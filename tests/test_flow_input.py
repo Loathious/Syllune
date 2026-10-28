@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 def optional_module(name):
     try:
-        return importlib.import_module('whisper_key.platform.windows.' + name)
+        return importlib.import_module('syllune.platform.windows.' + name)
     except ModuleNotFoundError:
         return None
 
@@ -130,7 +130,7 @@ class TextTargetTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform == 'win32', 'Windows SendInput backend')
 class ReleaseBatchTests(unittest.TestCase):
     def test_mask_precedes_win_release_in_one_batch(self):
-        from whisper_key.platform.windows import keyboard
+        from syllune.platform.windows import keyboard
         batches = []
 
         def send(inputs):
@@ -142,7 +142,7 @@ class ReleaseBatchTests(unittest.TestCase):
         self.assertEqual([[(0xE8, 0), (0xE8, 2), (0x5C, 3)]], batches)
 
     def test_incomplete_batch_and_non_win_key_are_not_claimed_as_released(self):
-        from whisper_key.platform.windows import keyboard
+        from syllune.platform.windows import keyboard
         with patch.object(keyboard, '_send', return_value=2):
             self.assertFalse(keyboard.mask_start_menu_and_release(0x5B))
             self.assertFalse(keyboard.mask_start_menu_and_release(0xA2))

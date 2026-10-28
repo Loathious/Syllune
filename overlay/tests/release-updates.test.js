@@ -9,6 +9,6 @@ test('release version ordering', () => {
   assert.equal(newer('v0.23.9', '0.24.0'), false);
   assert.equal(newer('invalid', '0.24.0'), false);
 });
-test('unconfigured development build never links upstream', () => {
-  assert.equal(releaseURL().includes('drajb'), false);
+test('release page is the configured Syllune repository', () => {
+  assert.equal(releaseURL(), 'https://github.com/Loathious/Syllune/releases');
 });

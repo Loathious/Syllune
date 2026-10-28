@@ -5,10 +5,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from whisper_key.config_manager import ConfigManager
-from whisper_key.hub_api import HubApi
-from whisper_key import transcript_log
-from whisper_key.text_postprocess import postprocess
+from syllune.config_manager import ConfigManager
+from syllune.hub_api import HubApi
+from syllune import transcript_log
+from syllune.text_postprocess import postprocess
 
 
 class HubLearningTests(unittest.TestCase):
@@ -16,7 +16,7 @@ class HubLearningTests(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         for module in ('config_manager', 'dictionary', 'transcript_log'):
-            context = patch(f'whisper_key.{module}.get_user_app_data_path', return_value=folder.name)
+            context = patch(f'syllune.{module}.get_user_app_data_path', return_value=folder.name)
             context.start()
             self.addCleanup(context.stop)
         self.config = ConfigManager(quiet=True)

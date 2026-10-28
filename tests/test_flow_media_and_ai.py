@@ -3,9 +3,9 @@ import unittest
 import urllib.error
 from unittest.mock import Mock, patch
 
-from whisper_key.media_pause import MediaPause
-from whisper_key import smart_edit
-from whisper_key.smart_edit import SmartEditor
+from syllune.media_pause import MediaPause
+from syllune import smart_edit
+from syllune.smart_edit import SmartEditor
 
 
 class MediaPauseTests(unittest.TestCase):
@@ -13,7 +13,7 @@ class MediaPauseTests(unittest.TestCase):
         media = Mock()
         media.pause_playing.return_value = pause_result
         media.resume.return_value = pause_result
-        with patch('whisper_key.platform.media', media, create=True):
+        with patch('syllune.platform.media', media, create=True):
             controller = MediaPause(lambda: enabled)
             controller.pause()
             if controller._pause_thread:

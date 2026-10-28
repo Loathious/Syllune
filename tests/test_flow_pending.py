@@ -2,7 +2,7 @@
 # Fake durable callbacks expose ordering, failures and focus-change races.
 import unittest
 from unittest.mock import Mock
-from whisper_key.pending_delivery import PendingDelivery
+from syllune.pending_delivery import PendingDelivery
 
 
 class PendingDeliveryTests(unittest.TestCase):

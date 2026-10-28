@@ -1,45 +1,26 @@
-# Security Policy
+# Security policy
 
-Whisper Local is a privacy-first tool. We take security reports seriously.
+Syllune runs on your own computer and keeps your recordings there, so security reports matter. Thank you for sending one.
 
 ## Reporting a vulnerability
 
-**Please do not open a public GitHub issue for security problems.**
+Please don't open a public issue for a security problem. Report it privately instead:
 
-Use GitHub's **Private Vulnerability Reporting** instead:
+1. Go to <https://github.com/Loathious/Syllune/security/advisories/new>
+2. Describe the problem, how to reproduce it, the Syllune version and what an attacker could do with it
 
-1. Go to <https://github.com/drajb/whisper-local/security/advisories/new>
-2. Fill in the form with as much detail as you can — reproduction steps, affected versions, impact assessment
-3. We'll acknowledge the report and work with you on a fix and coordinated disclosure
+You'll get a reply, and the fix is coordinated with you before anything is made public.
 
-If for some reason you can't use Private Vulnerability Reporting, you can DM the maintainer ([@drajb](https://github.com/drajb)) on GitHub instead.
+## What counts
 
-## Scope
+- Audio, transcripts or settings leaving the computer without the user choosing it. The only network requests Syllune makes on its own are speech-model downloads and the optional update check; the AI edit talks to a local Ollama server.
+- A dictated phrase that runs a command the user didn't set up.
+- Clipboard contents leaking between apps during automatic insertion.
+- Anything that needs or gains administrator rights. Syllune never should.
+- A vulnerability in a bundled component that affects Syllune itself.
 
-We're particularly interested in reports about:
-
-- **Arbitrary code execution** — anything in the voice command pipeline (`commands.yaml`) that lets a crafted phrase escape the matcher
-- **Audio exfiltration** — any code path where audio or transcripts leave the machine without explicit user opt-in (the only allowed network calls are the Whisper model download, the opt-in GPU install, and the opt-in update check — see `onboarding.py` and `update_check.py`)
-- **Clipboard hijacking** — bugs in the `paste_preserve_clipboard` logic that could leak previous clipboard contents
-- **Privilege escalation** — the app should never need admin/sudo. If you find a code path that does, report it
-- **Dependency vulnerabilities** that affect users of `whisper-local` specifically
-
-Out of scope:
-
-- Vulnerabilities in our dependencies that don't affect us (please report upstream instead)
-- Social-engineering attacks that require the user to type malicious `commands.yaml` entries themselves — the README has a warning about this
-- Issues that only reproduce on Python versions outside our supported range (3.11–3.13)
+Problems that need someone to edit your settings files themselves, or that only affect a component Syllune doesn't use, are out of scope.
 
 ## Supported versions
 
-We're a small project — only the latest released version on PyPI gets security fixes. If you're on an older version, please upgrade first and confirm the issue still reproduces.
-
-## Disclosure timeline
-
-We aim to:
-
-- Acknowledge the report within **7 days**
-- Provide a fix or mitigation within **30 days** for high-severity issues
-- Credit reporters in the changelog (unless you ask to stay anonymous)
-
-This is a best-effort project with no SLA; please be patient.
+Only the latest release gets fixes. Please check that the problem still happens there.

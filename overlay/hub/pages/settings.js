@@ -1,8 +1,7 @@
 // pages/settings.js
-// The settings people actually change: quality and microphone, the AI edit,
-// the pill, history and a few system options. Each control writes through
-// hub_api as soon as it changes. Everything else stays in Advanced settings
-// (tray menu), which edits the full settings file.
+// The few settings people actually change, in three groups: dictation,
+// general and privacy. Each control writes through hub_api as soon as it
+// changes. Everything else stays in the settings file (tray > Help).
 
 'use strict';
 
@@ -11,10 +10,11 @@ Hub.pages.settings = (() => {
 
   const set = (key, value) => api('setting_set', { key, value });
 
+  // Quality is also the AI edit switch: Fast is Whisper alone.
   const QUALITY_HINTS = {
-    fast: 'Quickest. Whisper alone, no AI edit.',
-    balanced: 'Accurate, with the AI edit for punctuation and tone. About a second or two.',
-    best: 'Largest model for English. Slower, and uses more video memory.',
+    fast: 'Quickest. Words are typed as spoken, without the AI edit.',
+    balanced: 'A local AI fixes punctuation, drops filler words and follows each app’s style.',
+    best: 'Like Balanced with the largest speech model. Slower, and needs a strong GPU.',
   };
   const RETENTION = [
     { value: null, label: 'Forever' },
@@ -25,66 +25,28 @@ Hub.pages.settings = (() => {
     { value: 0, label: 'Off' },
   ];
 
-  const POSITION_LABELS = { 'bottom-center': 'Bottom center', 'middle-left': 'Left side', 'middle-right': 'Right side' };
-  const positionLabel = (name) => POSITION_LABELS[name] || name;
-
   async function mount() {
     const s = await api('settings');
     return Hub.page('Settings', null,
-      section('Dictation', [qualityRow(s),
-        row('Quick short dictations', 'Clips up to two seconds use faster decoding and skip the AI rewrite.',
-          Hub.toggle({checked: s.quick_short_clips, label: 'Quick short dictations', onChange: v => set('quick_short_clips', v)})), micRow(s)]),
-      section('AI edit', [aiRow(s), modelRow(s), aboutRow(s)]),
-      section('Pill', [
-        row('Resting pill', 'A small pill stays on screen between dictations.',
-          Hub.toggle({ checked: s.idle_pill, label: 'Resting pill', onChange: (v) => set('idle_pill', v) })),
-        row('Position', null, Hub.select({
-          options: s.positions.map((p) => ({ value: p, label: positionLabel(p) })),
-          value: s.position, label: 'Pill position', onChange: (v) => set('position', v),
-        })),
-        row('Sounds', 'A short sound when recording starts and stops.',
+      section('Dictation', [micRow(s), qualityRow(s), s.ai_models.length > 1 ? modelRow(s) : null, aboutRow(s)]),
+      section('General', [
+        row('Sounds', 'A soft sound when recording starts and stops.',
           Hub.toggle({ checked: s.sounds, label: 'Sounds', onChange: (v) => set('sounds', v) })),
-      ]),
-      section('Privacy', [historyRow(s),
-        row('Save dictation audio', 'Keep playable recordings until you delete the dictation. Meetings also retain their audio.',
-          Hub.toggle({checked: s.keep_audio, label: 'Save dictation audio', onChange: v => set('keep_audio', v)})),
-        row('Your data', 'History, stats and settings, all in one folder on this PC.',
-          el('button', { class: 'button', type: 'button', on: { click: () => api('open_folder', { which: 'data' }).catch(Hub.toastError) } },
-            Hub.icon('folder'), 'Open folder')),
-      ]),
-      section('System', [
+        row('Resting pill', 'Keep a small pill on screen between dictations. Drag it to the bottom or either side.',
+          Hub.toggle({ checked: s.idle_pill, label: 'Resting pill', onChange: (v) => set('idle_pill', v) })),
         s.autostart_supported
           ? row('Start on login', null, Hub.toggle({ checked: s.autostart, label: 'Start on login', onChange: (v) => set('autostart', v) }))
           : null,
-        typingRow(s),
+        updatesRow(s),
       ]),
-      section('Setup and updates', [
-        row('Set up Syllune', 'Microphone, models, writing style and a place to try dictation.',
-          el('button', {class: 'button', type: 'button', text: 'Open setup guide', on: {click: () => Hub.navigate('onboarding')}})),
-        row('Check for updates daily', 'Checks Syllune’s public repository. Audio and transcripts stay here.',
-          Hub.toggle({checked: s.update_checks, label: 'Check for updates daily', onChange: v => set('update_checks', v)})),
-        updatesRow(),
+      section('Privacy', [historyRow(s),
+        row('Save dictation audio', 'Keep recordings you can play back until you delete the dictation.',
+          Hub.toggle({checked: s.keep_audio, label: 'Save dictation audio', onChange: v => set('keep_audio', v)})),
       ]),
-      el('p', { class: 'faint', style: { 'margin-top': '28px', 'text-align': 'center' }, text: 'Everything runs and stays on this PC.' }));
+      footer());
   }
 
   // --- Layout --------------------------------------------------------------
-
-  function updatesRow() {
-    const status = el('div', {class: 'row-hint', role: 'status', text: 'Install updates from Syllune’s repository releases.'});
-    const open = el('button', {class: 'button quiet', type: 'button', text: 'View releases', hidden: true,
-      on: {click: () => window.hub.openReleases().catch(Hub.toastError)}});
-    const check = el('button', {class: 'button', type: 'button', text: 'Check now', on: {click: async () => {
-      check.disabled = true; status.textContent = 'Checking…';
-      try {
-        const result = await window.hub.updateCheck();
-        status.textContent = result.message || (result.available ? `Update ${result.latest} is ready. Download its installer from releases.` : `You’re up to date (${result.current}).`);
-        open.hidden = !result.url;
-      } catch (error) { status.textContent = error.message; }
-      finally { check.disabled = false; }
-    }}});
-    return row('Repository updates', status, [check, open]);
-  }
 
   function section(title, rows) {
     return el('section', { class: 'settings-section' },
@@ -101,17 +63,16 @@ Hub.pages.settings = (() => {
       el('div', { class: 'row-control' }, control));
   }
 
-  // --- Dictation -----------------------------------------------------------
-
-  function qualityRow(s) {
-    const hint = el('div', { class: 'row-hint', text: QUALITY_HINTS[s.quality] || '' });
-    const control = Hub.segmented({
-      options: [{ value: 'fast', label: 'Fast' }, { value: 'balanced', label: 'Balanced' }, { value: 'best', label: 'Best' }],
-      value: s.quality, label: 'Quality', onChange: (v) => set('quality', v),
-    });
-    control.onPaint = (value) => { hint.textContent = QUALITY_HINTS[value] || ''; };
-    return row('Quality', hint, control.node);
+  // Rarely needed actions sit under the groups as quiet links.
+  function footer() {
+    const link = (text, onClick) => el('button', { class: 'entry-link', type: 'button', text, on: { click: onClick } });
+    return el('div', { class: 'settings-footer' },
+      el('span', { class: 'faint', text: 'Everything runs and stays on this PC.' }),
+      link('Open data folder', () => api('open_folder', { which: 'data' }).catch(Hub.toastError)),
+      link('Run setup again', () => Hub.navigate('onboarding')));
   }
+
+  // --- Dictation -----------------------------------------------------------
 
   function micRow(s) {
     const options = s.mics.map((mic) => ({ value: mic.id, label: mic.name }));
@@ -119,31 +80,35 @@ Hub.pages.settings = (() => {
     return row('Microphone', null, Hub.select({ options, value: s.mic, label: 'Microphone', onChange: (v) => set('mic', v) }));
   }
 
-  // --- AI edit -------------------------------------------------------------
-
-  function aiRow(s) {
-    return row('Clean up with AI',
-      'A local model fixes punctuation, drops filler words and follows each app’s style. It runs on your GPU and unloads while you game.',
-      Hub.toggle({ checked: s.ai_enabled, label: 'Clean up with AI', onChange: (v) => set('ai_enabled', v) }));
+  // The hint also says when the AI edit can't run, so a choice never fails silently.
+  function qualityRow(s) {
+    const hint = el('div', { class: 'row-hint' });
+    const paint = (value) => {
+      const offline = value !== 'fast' && !s.ai_reachable;
+      hint.textContent = offline ? 'Ollama isn’t running, so dictations are typed without the AI edit until it starts.' : QUALITY_HINTS[value] || '';
+    };
+    const control = Hub.segmented({
+      options: [{ value: 'fast', label: 'Fast' }, { value: 'balanced', label: 'Balanced' }, { value: 'best', label: 'Best' }],
+      value: s.quality, label: 'Quality', onChange: (v) => set('quality', v),
+    });
+    control.onPaint = paint;
+    paint(s.quality);
+    return row('Quality', hint, control.node);
   }
 
+  // Only shown when Ollama has more than one model to choose from.
   function modelRow(s) {
-    let status;
-    if (!s.ai_reachable) status = el('div', { class: 'row-hint' }, el('span', { class: 'dot off', style: { display: 'inline-block', 'margin-right': '6px' } }), "Ollama isn't running. Start it to use the AI edit.");
-    else if (!s.ai_models.length) status = el('div', { class: 'row-hint', text: 'No models installed in Ollama yet.' });
-    else status = el('div', { class: 'row-hint' }, el('span', { class: 'dot on', style: { display: 'inline-block', 'margin-right': '6px' } }), 'Ollama is running');
     const names = s.ai_models.includes(s.ai_model) ? s.ai_models : [s.ai_model, ...s.ai_models];
-    return row('Model', status, Hub.select({
+    return row('AI model', null, Hub.select({
       options: names.map((name) => ({ value: name, label: name })),
-      value: s.ai_model, label: 'AI model', disabled: !s.ai_models.length,
-      onChange: (v) => set('ai_model', v),
+      value: s.ai_model, label: 'AI model', onChange: (v) => set('ai_model', v),
     }));
   }
 
   // Saved a moment after you stop typing, and when you leave the field.
   function aboutRow(s) {
     const textarea = el('textarea', {
-      class: 'textarea', maxLength: 1500, rows: 4, spellcheck: 'true',
+      class: 'textarea', maxLength: 1500, rows: 3, spellcheck: 'true',
       placeholder: 'For example: I write short project updates. Names I use often: ...',
       'aria-label': 'About you',
     });
@@ -168,8 +133,28 @@ Hub.pages.settings = (() => {
     return el('div', { class: 'row stacked' },
       el('div', { class: 'row-text' },
         el('div', { class: 'row-label' }, 'About you ', savedNote),
-        el('div', { class: 'row-hint', text: 'Context the AI edit should know: your work, names, how you like things written.' })),
+        el('div', { class: 'row-hint', text: 'Your work, names and how you like things written, so the AI edit gets them right.' })),
       textarea);
+  }
+
+  // --- General -------------------------------------------------------------
+
+  // One row: the daily check, plus a button for checking right now.
+  function updatesRow(s) {
+    const status = el('div', { class: 'row-hint', role: 'status', text: 'Checks once a day. Audio and transcripts never leave this PC.' });
+    const open = el('button', { class: 'button quiet', type: 'button', text: 'View releases', hidden: true,
+      on: { click: () => window.hub.openReleases().catch(Hub.toastError) } });
+    const check = el('button', { class: 'button quiet', type: 'button', text: 'Check now', on: { click: async () => {
+      check.disabled = true; status.textContent = 'Checking…';
+      try {
+        const result = await window.hub.updateCheck();
+        status.textContent = result.message || (result.available ? `Version ${result.latest} is out. Download it from releases.` : `You’re up to date (${result.current}).`);
+        open.hidden = !result.url;
+      } catch (error) { status.textContent = error.message; }
+      finally { check.disabled = false; }
+    } } });
+    return row('Check for updates', status, [open, check,
+      Hub.toggle({ checked: s.update_checks, label: 'Check for updates daily', onChange: (v) => set('update_checks', v) })]);
   }
 
   // --- Privacy -------------------------------------------------------------
@@ -182,38 +167,6 @@ Hub.pages.settings = (() => {
     return row('Keep history', 'Older dictations are removed from this PC.', Hub.select({
       options, value: s.retention_days, label: 'Keep history', onChange: (v) => set('retention_days', v),
     }));
-  }
-
-  // --- System --------------------------------------------------------------
-
-  function typingRow(s) {
-    const input = el('input', {
-      class: 'input tabular', type: 'number', min: '10', max: '250', step: '1',
-      'aria-label': 'Typing speed in words per minute', style: { width: '76px' },
-    });
-    input.value = String(s.typing_wpm);
-    let saved = s.typing_wpm;
-    const save = Hub.debounce(async () => {
-      const value = Math.round(Number(input.value));
-      if (value === saved) return;
-      if (!(value >= 10 && value <= 250)) {
-        input.value = String(saved);
-        Hub.toast('Typing speed is between 10 and 250 words per minute');
-        return;
-      }
-      try {
-        await set('typing_wpm', value);
-        saved = value;
-      } catch (error) {
-        input.value = String(saved);
-        Hub.toastError(error);
-      }
-    }, 700);
-    input.addEventListener('input', save);
-    input.addEventListener('blur', save.flush);
-    flushers.push(save.flush);
-    return row('Typing speed', 'Used to work out how much time dictation saves you.',
-      el('span', { class: 'row-control' }, input, el('span', { class: 'muted', text: 'wpm' })));
   }
 
   // Pending text saves run before the page goes away.

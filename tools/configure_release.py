@@ -9,9 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def configure(value):
-    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value) or value.lower() == 'drajb/whisper-local':
-        raise ValueError('Use the dedicated Syllune owner/repo, not the original upstream project')
-    for relative in ('overlay/brand.json', 'src/whisper_key/release.json'):
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value):
+        raise ValueError('Give the release repository as owner/repo')
+    for relative in ('overlay/brand.json', 'src/syllune/release.json'):
         target = ROOT / relative
         data = json.loads(target.read_text(encoding='utf-8'))
         data['repository'] = value

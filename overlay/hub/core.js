@@ -78,12 +78,20 @@ const Hub = (() => {
     return el('button', { class: 'icon-button', type: 'button', title: label, 'aria-label': label, on: { click: onClick } }, icon(name));
   }
 
+  // Names people know an app by, where the executable spells it otherwise.
+  const APP_NAMES = {
+    chatgpt: 'ChatGPT', msedge: 'Microsoft Edge', chrome: 'Google Chrome', code: 'VS Code', winword: 'Word',
+    excel: 'Excel', powerpnt: 'PowerPoint', outlook: 'Outlook', olk: 'Outlook', 'ms-teams': 'Teams',
+    explorer: 'File Explorer', windowsterminal: 'Terminal', whatsapp: 'WhatsApp', onenote: 'OneNote',
+  };
+
   // Icons carry app identity; names remain available on hover and keyboard
   // focus. Only a sanitized executable leaf ever reaches the native resolver.
   function appBadge(executable, label) {
-    const name = label || String(executable || 'Application').replace(/\.exe$/i, '').replace(/^./, c => c.toUpperCase());
-    const badge = el('span', {class: 'app-badge', title: name, 'data-name': name, role: 'img', 'aria-label': name, tabIndex: 0},
-      el('span', {class: 'app-fallback', 'aria-hidden': 'true', text: name.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2)}));
+    const stem = String(executable || 'Application').replace(/\.exe$/i, '');
+    const name = label || APP_NAMES[stem.toLowerCase()] || stem.replace(/^./, c => c.toUpperCase());
+    const badge = el('span', {class: 'app-badge', 'data-name': name, role: 'img', 'aria-label': name, tabIndex: 0},
+      el('span', {class: 'app-fallback', 'aria-hidden': 'true', text: name.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 1)}));
     window.hub.appIcon?.(executable).then(source => {
       if (source && source.startsWith('data:image/')) badge.replaceChildren(el('img', {src: source, alt: '', width: 28, height: 28}));
     }).catch(() => {});

@@ -4,7 +4,7 @@ Speech recognition runs on this device. Optional text editing uses a local Ollam
 
 ## What is stored
 
-To preserve existing installations, Windows data remains under `%APPDATA%\whisperkey`; the internal Python package also keeps its established name. The visible app is Syllune.
+Your data lives in `%APPDATA%\Syllune` on Windows (`~/Library/Application Support/Syllune` on macOS). The app window's browser cache is kept apart in `%LOCALAPPDATA%\Syllune`.
 
 Settings, dictionary entries, corrections, local statistics, dictation history, and saved notes can contain personal information. If Save dictation audio is enabled, recordings are retained with history. Meeting recordings retain their audio until deleted. Review these choices in the setup guide and Settings. The microphone level test does not retain a recording.
 
@@ -21,4 +21,4 @@ These requests can reveal ordinary connection metadata such as your IP address t
 
 ## Publishing source safely
 
-The public repository excludes personal settings, recordings, histories, local assistant files, local build output, private verification screenshots, and development logs. New public history uses a public nickname/noreply identity and preserves the original MIT notice. Release preparation includes a source audit and a separate review of the outgoing file list. Automated scans help find mistakes but do not replace review.
+The public repository excludes personal settings, recordings, histories, local assistant files, local build output, private verification screenshots, and development logs. New public history uses a public nickname/noreply identity, and the MIT notice for the code Syllune grew out of is kept in THIRD_PARTY_NOTICES.md. Release preparation includes a source audit and a separate review of the outgoing file list. Automated scans help find mistakes but do not replace review.

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const geometry = require('../dock-geometry');
 const area = {x: -1920, y: -100, width: 1920, height: 1040};
 
-test('all docks use the correct orientation and stay inside a negative-origin display', () => {
+test('every dock lies along its edge in one window size, inside a negative-origin display', () => {
   for (const position of geometry.POSITIONS) {
     const dock = geometry.dockBounds(position, area);
     const window = geometry.pillBounds(position, area);
@@ -15,8 +15,8 @@ test('all docks use the correct orientation and stay inside a negative-origin di
     assert.ok(window.x >= area.x && window.y >= area.y);
     assert.ok(window.x + window.width <= area.x + area.width);
     assert.ok(window.y + window.height <= area.y + area.height);
-    assert.equal(dock.width > dock.height, position === 'bottom-center');
-    assert.equal(window.width > window.height, position === 'bottom-center');
+    assert.ok(geometry.isSide(position) ? dock.height > dock.width : dock.width > dock.height);
+    assert.deepEqual([window.width, window.height], [geometry.WINDOW_WIDTH, geometry.WINDOW_HEIGHT]);
   }
 });
 
@@ -30,12 +30,13 @@ test('a release over each visible preview selects that preview, including negati
 });
 
 test('side window and bottom window align their visual capsule with the preview', () => {
-  assert.deepEqual(geometry.dockBounds('bottom-center', area), {x:-1012,y:882,width:104,height:34});
-  assert.deepEqual(geometry.dockBounds('middle-left', area), {x:-1896,y:368,width:34,height:104});
-  assert.deepEqual(geometry.pillBounds('middle-right', area), {x:-160,y:210,width:160,height:420});
+  assert.deepEqual(geometry.dockBounds('bottom-center', area), {x:-1004,y:884,width:88,height:32});
+  assert.deepEqual(geometry.dockBounds('middle-left', area), {x:-1896,y:376,width:32,height:88});
+  assert.deepEqual(geometry.dockBounds('middle-right', area), {x:-56,y:376,width:32,height:88});
+  assert.deepEqual(geometry.pillBounds('middle-right', area), {x:-420,y:340,width:420,height:160});
 });
 
-test('small work areas clamp all native windows and preview geometry without losing orientation', () => {
+test('small work areas clamp all native windows and preview geometry', () => {
   const small = {x:230, y:-600, width:110, height:180};
   for (const position of geometry.POSITIONS) {
     for (const rect of [geometry.pillBounds(position, small), geometry.dockBounds(position, small)]) {
@@ -46,4 +47,12 @@ test('small work areas clamp all native windows and preview geometry without los
     const dock = geometry.dockBounds(position, small);
     assert.equal(geometry.candidate({x:dock.x + dock.width/2,y:dock.y+dock.height/2}, small), position);
   }
+});
+
+test('the glide eases out and stays under 300 ms however far it goes', () => {
+  assert.equal(geometry.easeOut(0), 0);
+  assert.equal(geometry.easeOut(1), 1);
+  assert.ok(geometry.easeOut(0.25) > 0.6);
+  assert.equal(geometry.glideMs(0), 180);
+  assert.equal(geometry.glideMs(5000), 280);
 });

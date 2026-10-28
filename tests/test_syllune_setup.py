@@ -10,9 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from whisper_key.app_setup import AppSetup, MODEL_OPTIONS, model_cached, download_model
-from whisper_key.config_manager import ConfigManager
-from whisper_key.hub_api import HubApi
+from syllune.app_setup import AppSetup, MODEL_OPTIONS, model_cached, download_model
+from syllune.config_manager import ConfigManager
+from syllune.hub_api import HubApi
 
 
 class SetupTests(unittest.TestCase):
@@ -20,7 +20,7 @@ class SetupTests(unittest.TestCase):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
         self.root = Path(self.folder.name)
-        self.path_patch = patch('whisper_key.config_manager.get_user_app_data_path', return_value=str(self.root))
+        self.path_patch = patch('syllune.config_manager.get_user_app_data_path', return_value=str(self.root))
         self.path_patch.start()
         self.addCleanup(self.path_patch.stop)
         self.config = ConfigManager(quiet=True)
@@ -60,7 +60,7 @@ class SetupTests(unittest.TestCase):
                        {'languages': 'en'}, {'mic': 999}, {'mic': True}, {'mic': []}):
             with self.subTest(values=values), self.assertRaises(ValueError):
                 self.setup.save(values)
-        self.assertEqual(0, self.config.config['setup']['step'])
+        self.assertIsNone(self.config.config['setup']['step'])
 
     def test_languages_apply_to_live_recognizer_and_disk(self):
         self.setup.save({'languages': ['en', 'sv', 'en']})
@@ -159,7 +159,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual('small', ConfigManager(quiet=True).get_whisper_config()['model'])
 
     def test_partial_cache_directory_is_not_usable(self):
-        with patch('whisper_key.app_setup.cache_root', return_value=self.root):
+        with patch('syllune.app_setup.cache_root', return_value=self.root):
             snapshot = self.root / 'models--Systran--faster-whisper-base' / 'snapshots' / 'revision'
             snapshot.mkdir(parents=True)
             (snapshot / 'model.bin.incomplete').write_bytes(b'partial')
@@ -167,6 +167,37 @@ class SetupTests(unittest.TestCase):
             for filename in ('model.bin', 'config.json', 'tokenizer.json', 'vocabulary.txt'):
                 (snapshot / filename).write_bytes(b'fixture')
             self.assertTrue(model_cached('base'))
+
+    def test_existing_install_keeps_its_model_and_skips_the_guide(self):
+        # Someone updating from a working install: Turbo in use, history on disk.
+        self.config.config['whisper']['model'] = 'large-v3-turbo'
+        self.state.whisper_engine.model_key = 'large-v3-turbo'
+        self.cached.add('large-v3-turbo')
+        self.config.config['setup'].update(step=None, model_key=None, completed=False)
+        history = self.root / 'transcripts.jsonl'
+        with patch('syllune.app_setup.transcript_log._path', return_value=history):
+            status = self.setup.status()
+            self.assertEqual('large-v3-turbo', status['model_key'])
+            self.assertTrue(status['ready'])
+            self.assertFalse(status['completed'])         # no history: a fresh install
+            history.write_text('{"text": "hello"}' + chr(10), encoding='utf-8')
+            self.assertTrue(self.setup.status()['completed'])
+        self.download.assert_not_called()
+        self.state.request_model_change.assert_not_called()
+
+    def test_current_model_outside_the_guide_is_offered_and_kept(self):
+        self.config.config['whisper']['model'] = 'kb-whisper-large'
+        self.state.whisper_engine.model_key = 'kb-whisper-large'
+        self.config.config['setup'].update(step=None, model_key=None)
+        status = self.setup.status()
+        self.assertEqual('kb-whisper-large', status['model_key'])
+        self.assertTrue(status['models'][0]['current'])
+        self.assertTrue(status['ready'])
+        self.setup.save({'model_key': 'kb-whisper-large'})
+        with self.assertRaises(ValueError):
+            self.setup.start_download('kb-whisper-large')
+        self.setup.complete()
+        self.assertTrue(self.config.config['setup']['completed'])
 
     def test_recommendation_stays_small_on_cpu(self):
         status = self.setup.status()
@@ -211,8 +242,8 @@ class SetupTests(unittest.TestCase):
         api = HubApi(self.state, self.config)
         self.addCleanup(lambda: api._pool.shutdown(wait=True))
         with self.assertRaises(ValueError):
-            api.setup_save({'step': 4, 'mic': 999})
-        self.assertEqual(0, self.config.config['setup']['step'])
+            api.setup_save({'step': 2, 'mic': 999})
+        self.assertIsNone(self.config.config['setup']['step'])
 
     def test_mic_test_only_opens_on_deliberate_start_and_closes(self):
         stream = Mock()
@@ -231,9 +262,9 @@ class SetupTests(unittest.TestCase):
         api = HubApi(self.state, self.config)
         self.addCleanup(lambda: api._pool.shutdown(wait=True))
         replies = []
-        api._run({'id': 1, 'method': 'setup_save', 'params': {'values': {'step': 4}}}, replies.append)
+        api._run({'id': 1, 'method': 'setup_save', 'params': {'values': {'step': 3}}}, replies.append)
         self.assertTrue(replies[-1]['ok'], replies[-1])
-        self.assertEqual(4, self.config.config['setup']['step'])
+        self.assertEqual(3, self.config.config['setup']['step'])
         api._run({'id': 2, 'method': 'setup_download', 'params': {'model_key': 'evil/repo'}}, replies.append)
         self.assertFalse(replies[-1]['ok'])
 

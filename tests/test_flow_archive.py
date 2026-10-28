@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from whisper_key import transcript_log
+from syllune import transcript_log
 
 
 class DictationHistoryTests(unittest.TestCase):
@@ -108,7 +108,7 @@ class DictationHistoryTests(unittest.TestCase):
 class RecordingArchiveTests(unittest.TestCase):
     def setUp(self):
         # Import inside setup so the first failing history test shows the old contract.
-        from whisper_key import recording_archive
+        from syllune import recording_archive
         self.archive = recording_archive
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

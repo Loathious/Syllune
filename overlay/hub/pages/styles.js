@@ -25,12 +25,6 @@ Hub.pages.styles = (() => {
   const styleLabel = (name) => STYLE_LABELS[name] ?? name.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
   const styleDescription = (name) => STYLE_DESCRIPTIONS[name] ?? 'Your own style, from the settings file.';
 
-  // "discord.exe" → "Discord"
-  function appName(match) {
-    const name = String(match).replace(/\.exe$/i, '');
-    return name.charAt(0).toUpperCase() + name.slice(1);
-  }
-
   async function mount() {
     const data = await api('styles');
     return Hub.page('Styles', null,
@@ -67,7 +61,7 @@ Hub.pages.styles = (() => {
   function ruleCard(rule, styles) {
     const appsLine = el('div', { class: 'style-apps' });
     const paintApps = (apps) => {
-      appsLine.replaceChildren(...[...new Set(apps)].map(app => Hub.appBadge(app, appName(app))));
+      appsLine.replaceChildren(...[...new Set(apps)].map(app => Hub.appBadge(app)));
     };
     paintApps(rule.apps);
 
@@ -139,7 +133,7 @@ Hub.pages.styles = (() => {
 
     function paint() {
       chips.replaceChildren(...apps.map((app) => {
-        const chip = el('span', { class: 'chip' }, Hub.appBadge(app, appName(app)));
+        const chip = el('span', { class: 'chip' }, Hub.appBadge(app));
         if (apps.length > 1) {
           chip.append(el('button', {
             class: 'chip-remove', type: 'button', 'aria-label': `Remove ${app}`,

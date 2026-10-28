@@ -2,9 +2,9 @@
 # These tests exercise text-only behavior, with no microphone or model needed.
 import unittest
 
-from whisper_key.dictionary import suggest_hotwords
-from whisper_key.corrections import corrections_from_edit
-from whisper_key.smart_edit import SmartEditor
+from syllune.dictionary import suggest_hotwords
+from syllune.corrections import corrections_from_edit
+from syllune.smart_edit import SmartEditor
 
 
 class FlowLearningTests(unittest.TestCase):

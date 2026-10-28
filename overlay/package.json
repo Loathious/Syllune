@@ -4,8 +4,8 @@
   "version": "0.24.0",
   "productName": "Syllune",
   "description": "Local dictation and private meeting notes",
-  "author": "Syllune contributors",
-  "license": "MIT",
+  "author": "Loathious",
+  "license": "UNLICENSED",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -22,13 +22,18 @@
     "executableName": "Syllune",
     "directories": {"output": "../dist/syllune", "buildResources": "assets"},
     "files": ["*.js", "*.html", "brand.json", "hub/**/*", "assets/syllune.*", "!tests/**"],
-    "extraResources": [{"from": "../dist/SylluneEngine", "to": "engine", "filter": ["**/*"]}],
+    "copyright": "Copyright (c) 2026 Loathious",
+    "extraResources": [{"from": "../dist/SylluneEngine", "to": "engine", "filter": ["**/*"]},
+      {"from": "../LICENSE", "to": "LICENSE.txt"}, {"from": "../THIRD_PARTY_NOTICES.md", "to": "THIRD_PARTY_NOTICES.md"}],
     "asar": true,
     "electronLanguages": ["en-US", "sv"],
-    "win": {"target": "nsis", "icon": "assets/syllune.ico", "artifactName": "Syllune-Setup-${version}-${arch}.${ext}"},
+    "win": {"target": "nsis", "icon": "assets/syllune.ico", "legalTrademarks": "Syllune", "requestedExecutionLevel": "asInvoker", "artifactName": "Syllune-Setup-${version}-${arch}.${ext}"},
     "nsis": {"oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true, "createStartMenuShortcut": true, "shortcutName": "Syllune",
-      "deleteAppDataOnUninstall": false, "runAfterFinish": true, "license": "../LICENSE"},
+      "deleteAppDataOnUninstall": false, "runAfterFinish": true, "license": "../LICENSE",
+      "installerIcon": "assets/syllune.ico", "uninstallerIcon": "assets/syllune.ico",
+      "installerSidebar": "assets/installerSidebar.bmp", "uninstallerSidebar": "assets/uninstallerSidebar.bmp",
+      "installerHeader": "assets/installerHeader.bmp", "uninstallDisplayName": "Syllune", "warningsAsErrors": false},
     "publish": null
   }
 }

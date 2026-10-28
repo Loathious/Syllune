@@ -20,7 +20,7 @@ Download `Syllune-Setup-<version>-x64.exe` from [Releases](https://github.com/Lo
 
 The installer is not code-signed yet, so Windows SmartScreen warns first. Compare the download with its `.sha256` file to check it arrived intact.
 
-More: [install and update](docs/syllune-install.md) · [privacy](docs/syllune-privacy.md) · [building a release](docs/syllune-release.md)
+More: [install and update](docs/syllune-install.md) · [troubleshooting](docs/syllune-troubleshooting.md) · [privacy](docs/syllune-privacy.md) · [building a release](docs/syllune-release.md)
 
 ## Run from source
 
@@ -28,11 +28,11 @@ More: [install and update](docs/syllune-install.md) · [privacy](docs/syllune-pr
 py -3.12 -m venv .venv
 .venv\Scripts\python.exe -m pip install -e .
 cd overlay; npm ci; cd ..
-.venv\Scripts\python.exe whisper-local.py
+.venv\Scripts\python.exe start-syllune.py
 ```
 
 Tests: `python -m unittest discover -s tests -t .` (with `PYTHONPATH=src`) and `npm test` in `overlay/`.
 
-## Credits
+## License
 
-Syllune is built on [Whisper Local](https://github.com/drajb/whisper-local) by Rohit Burani, itself based on whisper-key-local by Pin Wang. The upstream README is kept in [docs/whisper-local-readme.md](docs/whisper-local-readme.md). Licensed under the [MIT License](LICENSE); see [AUTHORS](AUTHORS.md).
+Syllune is proprietary software by Loathious, free to use for now. The source is public so you can see what it does, but it may not be copied, changed or redistributed; see [LICENSE](LICENSE). Open-source code and components Syllune uses are listed with their notices in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

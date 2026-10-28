@@ -3,7 +3,7 @@
 # Text-only: no Ollama, microphone or model is needed.
 import unittest
 
-from whisper_key.smart_edit import (EXAMPLES, STRUCTURE_EXAMPLES, SmartEditor,
+from syllune.smart_edit import (EXAMPLES, STRUCTURE_EXAMPLES, SmartEditor,
                                     _tighten_lists, is_faithful)
 
 

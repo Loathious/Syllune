@@ -6,7 +6,7 @@ import unittest.mock
 from unittest.mock import Mock
 from types import SimpleNamespace
 import numpy as np
-from whisper_key.whisper_engine import WhisperEngine
+from syllune.whisper_engine import WhisperEngine
 
 
 class QuickDecodeTests(unittest.TestCase):

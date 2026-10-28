@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the idea! Please check [open issues](https://github.com/drajb/whisper-local/issues?q=is%3Aissue) and [discussions](https://github.com/drajb/whisper-local/discussions) first to see if something similar is already on the radar.
+        Thanks for the idea! Please check [open issues](https://github.com/Loathious/Syllune/issues?q=is%3Aissue) first to see if something similar is already on the radar.
 
   - type: textarea
     id: problem
@@ -35,7 +35,7 @@ body:
     id: privacy
     attributes:
       label: Privacy check
-      description: Whisper Local is a privacy-first tool. Confirm one of the following:
+      description: Syllune is a privacy-first tool. Confirm one of the following:
       options:
         - label: This feature works fully offline (no audio or transcript leaves the machine).
         - label: This feature requires an external service, and that should be opt-in.

@@ -1,54 +1,108 @@
-/* Onboarding uses the hub's native controls and a compact progress rail.
-   All layout stays in this external stylesheet for the hub's strict CSP. */
-.setup-layout { display: grid; grid-template-columns: 155px minmax(0, 1fr); gap: 28px; }
-.setup-steps { list-style: none; padding: 0; margin: 0; color: #8e9bae; font-size: 12px; }
-.setup-steps li { display: flex; align-items: center; gap: 9px; padding: 10px 0; }
-.setup-steps .current { color: #d8e2ee; font-weight: 600; }
-.setup-step-number { border: 1px solid #34445c; width: 23px; height: 23px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; }
-.current .setup-step-number { background: #17243b; border-color: #86acd8; color: #b7d5f5; }
-.setup-content { min-width: 0; }
-.setup-heading { margin: 0 0 20px; font-size: 19px; color: #d8e2ee; }
-.setup-heading:focus { outline: none; }
-.setup-body h2 { font-size: 25px; font-weight: 600; letter-spacing: -.6px; line-height: 1.25; }
-.setup-copy { color: #aebed1; line-height: 1.7; margin: 12px 0; font-size: 13px; }
-.setup-wave { color: #86acd8; font-size: 70px; line-height: .8; padding: 10px 0 16px; }
-.setup-note { background: #17243b; border: 1px solid #34445c; border-radius: 10px; padding: 14px; color: #d8e2ee; font-size: 12px; line-height: 1.7; margin: 16px 0; }
-.setup-label, .setup-field > span:first-child { display: block; color: #d8e2ee; font-size: 13px; font-weight: 600; margin-bottom: 9px; }
-.setup-field { display: block; margin: 18px 0; }
-.setup-field .select { max-width: 100%; width: 100%; }
-.setup-field .row-hint { display: block; margin-top: 8px; line-height: 1.6; }
-.setup-mic { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.setup-mic meter { flex: 1; min-width: 100px; height: 16px; }
-.setup-mic .row-hint { width: 100%; }
-.setup-languages, .setup-models { border: 1px solid #34445c; border-radius: 10px; padding: 12px; margin: 18px 0; }
-.setup-languages legend, .setup-models legend { color: #d8e2ee; font-size: 13px; padding: 0 6px; }
-.setup-languages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-height: 225px; overflow: auto; }
-.setup-languages label { display: flex; gap: 7px; align-items: center; font-size: 12px; padding: 5px 0; }
-.setup-languages input, .setup-model input, .setup-option input { accent-color: #86acd8; }
-.setup-model { display: flex; gap: 12px; padding: 14px 5px; cursor: pointer; }
-.setup-model + .setup-model { border-top: 1px solid #28384f; }
-.setup-model input { margin-top: 4px; flex-shrink: 0; }
-.setup-model strong, .setup-option strong { color: #d8e2ee; font-weight: 600; font-size: 13px; }
-.setup-model .row-hint, .setup-option .row-hint { display: block; line-height: 1.6; padding-top: 4px; }
-.setup-model-status progress { width: 100%; accent-color: #86acd8; height: 8px; }
-.setup-transfer { color: #aebed1; font-size: 12px; line-height: 1.7; }
-.setup-example { margin: 18px 0; padding: 15px; border-left: 2px solid #86acd8; background: #17243b; color: #d8e2ee; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
-.setup-controls { color: #aebed1; font-size: 13px; line-height: 1.7; padding-left: 20px; }
-.setup-controls li { padding: 5px 0; }
-.setup-option { display: flex; align-items: flex-start; gap: 12px; padding: 13px 0; border-bottom: 1px solid #28384f; cursor: pointer; }
-.setup-option input { margin-top: 4px; }
-.setup-navigation { display: flex; gap: 8px; align-items: center; border-top: 1px solid #28384f; padding-top: 20px; margin-top: 24px; flex-wrap: wrap; }
-.setup-navigation .button:last-child { margin-left: auto; }
-.setup-error { color: #f0a5a5; font-size: 12px; line-height: 1.6; }
-.setup-error:empty { display: none; }
-.setup-scratch { width: 100%; min-height: 130px; }
-.setup-content :is(button, input, select, textarea):focus-visible { outline: 2px solid #86acd8; outline-offset: 3px; }
-@media (max-width: 850px) {
-  .setup-layout { grid-template-columns: 1fr; gap: 20px; }
-  .setup-steps { display: flex; flex-wrap: wrap; gap: 4px 16px; }
-  .setup-steps li { padding: 3px 0; }
-  .setup-languages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* onboarding.css
+   The setup guide: one centred card over the whole window, a four-part
+   progress line, and a short fade-and-rise between steps. Colours come from
+   the hub tokens; everything stays in this file for the hub's strict CSP. */
+
+/* --- Full-window mode ---------------------------------------------------- */
+
+body.setup-mode { grid-template-columns: minmax(0, 1fr); }
+body.setup-mode .sidebar { display: none; }
+body.setup-mode .titlebar, body.setup-mode .content { grid-column: 1; }
+
+.setup {
+  position: relative;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 12px 24px 40px;
 }
+
+.setup-close { position: absolute; top: 0; right: 24px; }
+
+.setup-card { width: min(520px, 100%); }
+
+/* --- Progress ------------------------------------------------------------ */
+
+.setup-progress { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.setup-progress span { height: 3px; border-radius: 2px; background: var(--line); transition: background-color 200ms ease; }
+.setup-progress span.done { background: var(--accent); }
+.setup-count { margin: 10px 0 28px; color: var(--faint); font-size: 12px; }
+
+/* --- Step content -------------------------------------------------------- */
+
+.setup-step { transition: opacity 220ms var(--ease-out), transform 220ms var(--ease-out); }
+@starting-style { .setup-step { opacity: 0; transform: translateY(8px); } }
+
+.setup-mark { display: block; margin-bottom: 20px; border-radius: 14px; }
+.setup-title { margin: 0 0 10px; font: 600 24px/1.25 var(--font-display); letter-spacing: -0.01em; }
+.setup-title:focus { outline: none; }
+.setup-lead { margin: 0 0 24px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.setup-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.55; }
+.setup-hint:empty { display: none; }
+.setup-label { display: block; margin: 0 0 8px; font-weight: 600; }
+.setup-group { margin-top: 28px; }
+.setup-group .select { margin-top: 10px; }
+
+.setup-points { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.setup-points li { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+
+/* Keys as small caps of the hub's raised surface. */
+.setup-keys { display: inline-flex; gap: 4px; margin: 0 2px; vertical-align: middle; }
+.setup-keys kbd {
+  min-width: 24px; height: 24px; padding: 0 7px;
+  display: inline-grid; place-items: center;
+  border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 6px;
+  background: var(--panel-raised); color: var(--text);
+  font: 600 12px/1 var(--font);
+}
+.setup-how { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+
+/* --- Microphone ---------------------------------------------------------- */
+
+.setup-level-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.setup-level { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.setup-level-fill { position: absolute; inset: 0; background: var(--accent); transform: scaleX(0); transform-origin: left; transition: transform 100ms linear; }
+.setup-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 28px; }
+.setup-chips > .setup-hint { margin: 0; }
+
+/* --- Speech model -------------------------------------------------------- */
+
+.setup-choices { display: grid; gap: 8px; }
+.setup-choice {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 14px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--panel); cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.setup-choice:has(input:checked) { border-color: var(--accent-mid); background: var(--panel-raised); }
+.setup-choice input { margin: 3px 0 0; accent-color: var(--accent); flex: none; }
+.setup-choice-text { display: grid; gap: 2px; min-width: 0; }
+.setup-choice-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: 600; }
+.setup-choice .setup-hint { margin: 0; }
+.setup-tag { padding: 1px 7px; border-radius: 9px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; }
+@media (hover: hover) and (pointer: fine) {
+  .setup-choice:hover { border-color: var(--line-strong); }
+}
+.setup-model-status { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+.setup-model-status .button[hidden], .setup-level[hidden] { display: none; }
+.setup-progress-bar .setup-level-fill { transition: transform 300ms var(--ease-out); }
+
+/* --- Try it -------------------------------------------------------------- */
+
+.setup-scratch { min-height: 110px; }
+.setup-tips { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 8px; color: var(--muted); }
+.setup-tips li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+
+/* --- Footer -------------------------------------------------------------- */
+
+.setup-error { margin: 16px 0 0; color: var(--danger); font-size: 12px; line-height: 1.6; }
+.setup-error:empty { display: none; }
+.setup-nav { display: flex; align-items: center; gap: 8px; margin-top: 32px; }
+.setup-nav .button.primary { margin-left: auto; min-width: 110px; height: 34px; }
+.setup-nav .button[hidden] { display: none; }
+
 @media (prefers-reduced-motion: reduce) {
-  .setup-layout *, .setup-layout *::before, .setup-layout *::after { animation: none !important; transition: none !important; }
+  @starting-style { .setup-step { opacity: 0; transform: none; } }
+  .setup-step { transition: opacity 150ms ease; }
+  .setup-level-fill { transition: none; }
 }
