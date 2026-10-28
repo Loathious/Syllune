@@ -162,6 +162,16 @@ def setup_streaming(streaming_config, model_registry):
 
 def setup_whisper_engine(whisper_config, vad_manager, model_registry, log_transcriptions=False, config_manager=None):
     from .whisper_engine import WhisperEngine
+    # The installed shell must be usable before models, network access or GPU
+    # initialization finish. Keep the saved GPU preference, but use a working
+    # CPU backend this session when this machine lacks its optional runtime.
+    packaged = bool(getattr(sys, 'frozen', False) or os.environ.get('SYLLUNE_ELECTRON_EXE'))
+    whisper_config = dict(whisper_config)
+    if packaged and whisper_config['device'] == 'cuda':
+        from .hardware_detection import missing_gpu_libraries
+        if missing_gpu_libraries():
+            logging.getLogger(__name__).warning('GPU runtime unavailable; using CPU for this session')
+            whisper_config.update(device='cpu', compute_type='int8')
     backend = whisper_config.get('backend', 'faster_whisper')
 
     if backend == 'whisper_cpp':
@@ -198,7 +208,7 @@ def setup_whisper_engine(whisper_config, vad_manager, model_registry, log_transc
             language_models=whisper_config.get('language_models') or {},
             # First-run setup owns all model downloads. Cached existing installs
             # keep starting normally, without forcing their settings to change.
-            defer_load=bool(config_manager and not (config_manager.config.get('setup') or {}).get('completed')
+            defer_load=packaged or bool(config_manager and not (config_manager.config.get('setup') or {}).get('completed')
                             and not model_registry.is_model_cached(whisper_config['model'])),
         )
     except RuntimeError as e:
@@ -266,7 +276,8 @@ def run_gpu_onboarding(config_manager, whisper_config):
     # handle it. Without this, a first-ever windowless launch on a GPU machine
     # could hang on the prompt. (sys.stdout is reassigned to devnull earlier under
     # pythonw, so sys.stdin is the reliable no-console signal here.)
-    if sys.stdin is None:
+    from .terminal_ui import can_prompt
+    if not can_prompt():
         logging.getLogger(__name__).info("Skipping GPU onboarding prompt (no console); deferring to next launch")
         return whisper_config
     from .hardware_detection import detect_and_print as detect_hardware
@@ -589,7 +600,10 @@ def main():
         vad_manager = setup_vad(vad_config)
         streaming_manager = setup_streaming(streaming_config, model_registry)
         whisper_engine = setup_whisper_engine(whisper_config, vad_manager, model_registry, log_transcriptions, config_manager)
-        streaming_manager.initialize()
+        # Source/console launches keep their existing behavior. The installed
+        # GUI must connect before optional streaming downloads or warmup run.
+        if not os.environ.get('SYLLUNE_UI_PORT'):
+            streaming_manager.initialize()
         clipboard_manager = setup_clipboard_manager(clipboard_config)
         audio_feedback = setup_audio_feedback(audio_feedback_config)
         voice_command_manager = setup_voice_commands(voice_commands_config, clipboard_manager, log_transcriptions, config_manager)
@@ -625,7 +639,15 @@ def main():
 
         system_tray.start()
         terminal_title.start()
+        if os.environ.get('SYLLUNE_UI_PORT'):
+            threading.Thread(target=streaming_manager.initialize, daemon=True, name='streaming-startup').start()
         if not (config_manager.config.get('setup') or {}).get('completed'):
+            state_manager.open_hub('onboarding')
+        # An existing model loads off the UI thread. First-run downloads stay
+        # explicit in the setup guide instead of silently blocking app launch.
+        if whisper_engine.model is None and model_registry.is_model_cached(whisper_engine.model_key):
+            state_manager.request_model_change(whisper_engine.model_key)
+        elif whisper_engine.model is None:
             state_manager.open_hub('onboarding')
 
         if clipboard_config['auto_paste']:
@@ -702,10 +724,13 @@ def main():
         # about NoneType instead of what is wrong with their file.
         logging.getLogger(__name__).error(f"Unexpected error: {e}", exc_info=True)
         print(f"Error occurred: {e}")
+        if state_manager and hasattr(state_manager.level_overlay, 'startup_failed'):
+            state_manager.level_overlay.startup_failed()
+        return 1
         
     finally:
         shutdown_app(hotkey_listener, state_manager, logger)
         cleanup_pid_file(instance_name)
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

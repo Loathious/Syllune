@@ -84,8 +84,13 @@ class StreamingManager:
         if not self.streaming_enabled:
             return
 
-        if self._load_model():
-            print(f"   ✓ Real-time speech recognition [{self.streaming_model}] enabled...")
+        try:
+            if self._load_model():
+                print(f"   ✓ Real-time speech recognition [{self.streaming_model}] enabled...")
+        except Exception:
+            self._model_loaded = False
+            self.recognizer = None
+            self.logger.warning('Optional real-time recognition could not start', exc_info=True)
 
     def _load_model(self) -> bool:
         if self._model_loaded:
@@ -98,8 +103,10 @@ class StreamingManager:
         success = self.recognizer.load_model()
 
         if success:
-            self._model_loaded = True
             self.recognizer.warmup()
+            # Installed startup runs in the background: only expose the native
+            # recognizer after warmup has finished feeding/resetting its stream.
+            self._model_loaded = True
             self.logger.info("Streaming STT model loaded successfully")
         else:
             self.recognizer = None

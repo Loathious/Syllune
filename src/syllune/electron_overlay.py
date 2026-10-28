@@ -61,6 +61,17 @@ class ElectronOverlay:
     # --- Lifecycle -----------------------------------------------------------
 
     def start(self):
+        # Installed apps already own a visible Electron shell. Connecting to
+        # it avoids the old launcher->engine->second-shell race and makes a
+        # second desktop click focus the same GUI instead of killing/restarting.
+        shell_port = os.environ.get('SYLLUNE_UI_PORT')
+        if shell_port:
+            self._connection = socket.create_connection(('127.0.0.1', int(shell_port)), timeout=self.CONNECT_TIMEOUT_S)
+            self._connection.settimeout(None)
+            self._shell_pid = int(os.environ.get('SYLLUNE_UI_PID') or 0)
+            self._send({'type': 'hello', 'token': os.environ.get('SYLLUNE_UI_TOKEN', '')})
+            self._connected()
+            return
         if not ELECTRON_EXE.exists():
             raise RuntimeError(f"Electron not installed ({ELECTRON_EXE}); run npm install in overlay/")
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -96,8 +107,13 @@ class ElectronOverlay:
             raise RuntimeError("Electron overlay never connected")
         finally:
             listener.close()
+        self._connected()
+
+    # Both development and installed transports share the same message pump.
+    def _connected(self):
         self._connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self._send({'type': 'config', 'position': self.position, 'idle_pill': self.idle_pill})
+        self._send({'type': 'config', 'position': self.position, 'idle_pill': self.idle_pill,
+                    'notes_dir': str(self.notes_dir) if self.notes_dir else None})
         threading.Thread(target=self._level_pump, daemon=True, name='electron-overlay-levels').start()
         threading.Thread(target=self._read_actions, daemon=True, name='electron-overlay-actions').start()
 
@@ -105,12 +121,21 @@ class ElectronOverlay:
         self._stopping = True
         self._send({'type': 'quit'})
         if self._connection:
+            try:
+                self._connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             self._connection.close()
         if self._process:
             try:
                 self._process.wait(timeout=2)
             except Exception:
                 self._process.kill()
+
+    # Initialization can fail after IPC connects (hotkeys, audio, tray). Tell
+    # the supervising shell before normal cleanup sends its final quit message.
+    def startup_failed(self):
+        self._send({'type': 'startup_error', 'message': 'Syllune could not finish starting. Open logs for details, then retry.'})
 
     # --- LevelOverlay API ----------------------------------------------------
 
@@ -186,10 +211,11 @@ class ElectronOverlay:
     # take focus if we pass that right on, otherwise the hub just flashes in
     # the taskbar.
     def open_hub(self, page: str = 'home'):
-        if sys.platform == 'win32' and self._process:
+        gui_pid = getattr(self, '_shell_pid', 0) or (self._process.pid if self._process else 0)
+        if sys.platform == 'win32' and gui_pid:
             try:
                 import ctypes
-                ctypes.windll.user32.AllowSetForegroundWindow(self._process.pid)
+                ctypes.windll.user32.AllowSetForegroundWindow(gui_pid)
             except Exception:
                 pass
         self._send({'type': 'open_hub', 'page': page})

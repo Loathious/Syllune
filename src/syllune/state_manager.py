@@ -190,7 +190,11 @@ class StateManager:
             pass
 
         overlay_cfg = self.config_manager.config.get('overlay', {}) or {}
-        if overlay_cfg.get('enabled', True):
+        # The installed shell still needs its engine connection when someone
+        # has disabled the pill; otherwise even Settings can never open.
+        if overlay_cfg.get('enabled', True) or os.environ.get('SYLLUNE_UI_PORT'):
+            if not overlay_cfg.get('enabled', True):
+                overlay_cfg = {**overlay_cfg, 'idle_pill': False}
             self.level_overlay = self._start_electron_overlay(overlay_cfg)
         if overlay_cfg.get('enabled', True) and not self.level_overlay:
             try:

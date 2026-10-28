@@ -3,6 +3,7 @@
 # the interactive first-run paths — GPU onboarding and the setup wizard. Reads a
 # raw keypress via the platform layer, so callers must not use it on a windowless
 # launch where there is no console to answer.
+import sys
 from .platform import app
 
 BOLD_GREEN = "\x1b[1;32m"
@@ -11,6 +12,12 @@ CYAN = "\x1b[36m"
 BOLD_CYAN = "\x1b[1;36m"
 DIM = "\x1b[2m"
 RESET = "\x1b[0m"
+
+
+# A redirected stdin object exists under some windowless launchers, but cannot
+# receive a keypress. Checking only for None left installed GPU recovery stuck.
+def can_prompt() -> bool:
+    return sys.stdin is not None and bool(getattr(sys.stdin, 'isatty', lambda: False)())
 
 
 def prompt_choice(title: str, options: list[tuple[str, str]], subtitle: str = None) -> int:

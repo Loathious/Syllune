@@ -9,6 +9,10 @@ const fs = require('fs');
 const path = require('path');
 const appIcons = require('../app-icons');
 
+// Each renderer check owns its browser cache; simultaneous checks must not
+// contend with one another or with a real development Electron session.
+app.setPath('userData', path.join(app.getPath('temp'), `syllune-hub-check-${process.pid}`));
+
 const OUT = path.join(__dirname, '..', '..', '.temp', 'hub-check');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -83,7 +87,7 @@ async function run() {
   fs.mkdirSync(OUT, {recursive: true});
   const win = new BrowserWindow({width: 1040, height: 700, show: false,
     webPreferences: {preload, contextIsolation: false, sandbox: false, offscreen: true}});
-  win.webContents.on('console-message', event => { if (event.level === 'error') failures.push(`console: ${event.message}`); });
+  win.webContents.on('console-message', event => { if (event.level === 'error') { failures.push(`console: ${event.message}`); console.error(event.message); } });
   const js = code => win.webContents.executeJavaScript(code);
   const shot = async name => fs.writeFileSync(path.join(OUT, `${name}.png`), (await win.webContents.capturePage()).toPNG());
   const clickNext = () => js(`document.querySelector('.setup-nav .button.primary').click()`);

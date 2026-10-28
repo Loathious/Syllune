@@ -13,7 +13,7 @@ const path = require('path');
 const fs = require('fs');
 const net = require('net');
 const readline = require('readline');
-const {spawn} = require('child_process');
+const {startEngine} = require('./engine-launcher');
 const brand = require('./brand.json');
 const updates = require('./release-updates');
 const appIcons = require('./app-icons');
@@ -32,7 +32,7 @@ const argValue = (name) => {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : null;
 };
-const notesDir = argValue('--notes-dir') || path.join(app.getPath('home'), 'Voice Notes');
+let notesDir = argValue('--notes-dir') || path.join(app.getPath('home'), 'Voice Notes');
 
 // Your data (settings, history, recordings) is the engine's folder; the
 // window's own browser storage and icon cache live apart from it, so the data
@@ -47,6 +47,10 @@ app.setPath('userData', cacheDir);
 let pill = null;
 let hub = null;
 let engine = null;               // socket to the Python engine
+let engineRuntime = null;
+let startupWindow = null;
+let startupError = '';
+let startingEngine = false;
 let position = 'bottom-center';
 let idlePill = true;
 let gameMode = false;
@@ -67,7 +71,16 @@ let dockSwitch = null;           // {display, timer} while the pill fades out of
 // call on it throws; every timer and message path checks this first.
 const alive = (win) => !!win && !win.isDestroyed();
 
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!app.requestSingleInstanceLock()) { app.quit(); return; }
+// Reopening the installed shortcut is navigation, never another engine start.
+app.on('second-instance', () => {
+  if (alive(startupWindow)) { startupWindow.restore(); startupWindow.show(); startupWindow.focus(); }
+  else if (engine && !engine.destroyed) openHub('home');
+});
+app.on('activate', () => {
+  if (alive(startupWindow)) startupWindow.show();
+  else if (engine && !engine.destroyed) openHub('home');
+});
 
 // --- Errors ----------------------------------------------------------------
 // The overlay runs unattended, so an uncaught error must never become Electron's
@@ -87,6 +100,7 @@ process.on('uncaughtException', (error) => {
 // landing in between must not touch them.
 function quit(code = 0) {
   quitting = true;
+  engineRuntime?.stop();
   clearTimeout(dockSwitch?.timer);
   clearDockPreviews();
   stopHoverPoll();
@@ -98,15 +112,65 @@ function quit(code = 0) {
 // grouping under Electron.
 // An installed shortcut starts this shell, which hands lifetime to the engine.
 // The engine reconnects using --port; it does not need a system Python/Node.
-function launchBundledEngine() {
-  const executable = path.join(process.resourcesPath, 'engine', 'SylluneEngine.exe');
-  if (!fs.existsSync(executable)) throw new Error('The bundled Syllune engine is missing. Reinstall Syllune.');
-  const child = spawn(executable, [], {detached: true, stdio: 'ignore', windowsHide: true, env: {
-    ...process.env, SYLLUNE_ELECTRON_EXE: process.execPath, SYLLUNE_OVERLAY_DIR: __dirname,
-  }});
-  child.on('error', error => { require('electron').dialog.showErrorBox('Syllune could not start', error.message); app.exit(1); });
-  child.once('spawn', () => { child.unref(); app.exit(0); });
+function showStartup(error = '') {
+  startupError = error;
+  if (!alive(startupWindow)) {
+    startupWindow = new BrowserWindow({width: 560, height: 390, resizable: false,
+      title: brand.name, backgroundColor: '#101929', icon: path.join(__dirname, 'assets', 'syllune.ico'),
+      show: false, webPreferences: {preload: path.join(__dirname, 'startup-preload.js'), sandbox: true}});
+    startupWindow.removeMenu();
+    startupWindow.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
+    startupWindow.webContents.on('will-navigate', event => event.preventDefault());
+    startupWindow.webContents.on('did-finish-load', () => {
+      if (alive(startupWindow)) startupWindow.webContents.send('startup:status', {error: startupError});
+    });
+    startupWindow.once('ready-to-show', () => { if (alive(startupWindow)) startupWindow.show(); });
+    startupWindow.on('closed', () => { startupWindow = null; if (!engine || engine.destroyed) quit(); });
+    startupWindow.loadFile(path.join(__dirname, 'startup.html'));
+  } else {
+    startupWindow.webContents.send('startup:status', {error});
+    startupWindow.show();
+  }
 }
+
+function engineFailed(error) {
+  if (quitting) return;
+  startingEngine = false;
+  engine = null;
+  // Destroying the pill must not trigger its usual crash-recovery respawn.
+  quitting = true;
+  if (alive(pill)) pill.destroy();
+  if (alive(hub)) hub.destroy();
+  quitting = false;
+  showStartup(error.message);
+}
+
+async function launchBundledEngine() {
+  if (startingEngine) return;
+  startingEngine = true;
+  showStartup();
+  engine = null;
+  engineRuntime?.stop();
+  const executable = path.join(process.resourcesPath, 'engine', 'SylluneEngine.exe');
+  if (!fs.existsSync(executable)) { engineFailed(new Error('The speech engine is missing. Reinstall Syllune.')); return; }
+  try {
+    engineRuntime = await startEngine({executable, args: process.argv.includes('--test') ? ['--test'] : [],
+      dataDir, shellExecutable: process.execPath,
+      shellPid: process.pid, overlayDir: __dirname,
+      onConnect(socket, buffered) {
+        startingEngine = false;
+        attachEngineSocket(socket, buffered);
+        createPill();
+        openHub('home');
+        if (alive(startupWindow)) startupWindow.close();
+      }, onFailure: engineFailed});
+  } catch (error) { engineFailed(error); }
+}
+
+const fromStartup = event => alive(startupWindow) && event.sender === startupWindow.webContents;
+ipcMain.on('startup:retry', event => { if (fromStartup(event)) launchBundledEngine(); });
+ipcMain.on('startup:logs', event => { if (fromStartup(event)) shell.openPath(dataDir); });
+ipcMain.on('startup:quit', event => { if (fromStartup(event)) quit(); });
 
 app.whenReady().then(() => {
   if (app.isPackaged && !argValue('--port')) { launchBundledEngine(); return; }
@@ -122,6 +186,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', (e) => e.preventDefault());
 app.on('before-quit', () => {
   quitting = true;
+  engineRuntime?.stop();
   clearDockPreviews();
   stopHoverPoll();
   clearInterval(moveTimer);
@@ -454,17 +519,27 @@ function listenToEngine() {
   const port = Number(argValue('--port'));
   if (!port) { quit(1); return; }
   const socket = net.connect({ host: '127.0.0.1', port });
+  attachEngineSocket(socket);
+}
+
+function attachEngineSocket(socket, buffered = '') {
   socket.setNoDelay(true);
   engine = socket;
   const rl = readline.createInterface({ input: socket });
   rl.on('line', (line) => {
+    if (engine !== socket) return;
     let msg;
     try { msg = JSON.parse(line); } catch { return; }
     handle(msg);
   });
   // Engine gone (closed or crashed): nothing left to show.
-  socket.on('close', () => quit());
-  socket.on('error', () => quit());
+  socket.on('close', () => {
+    if (engine !== socket) return;
+    if (app.isPackaged && !quitting) engineFailed(new Error('The speech engine disconnected. Open logs for details, then retry.'));
+    else if (!quitting) quit();
+  });
+  socket.on('error', error => { if (app.isPackaged) engineFailed(error); else quit(1); });
+  if (buffered) socket.unshift(Buffer.from(buffered));
 }
 
 function handle(msg) {
@@ -491,6 +566,7 @@ function handle(msg) {
       sendToPill('level', { v: msg.v, bands: msg.bands });
       break;
     case 'config':
+      if (typeof msg.notes_dir === 'string' && path.isAbsolute(msg.notes_dir)) notesDir = msg.notes_dir;
       if (docks.POSITIONS.includes(msg.position) && msg.position !== position) {
         cancelPillDrag();
         switchDock(msg.position);
@@ -519,6 +595,9 @@ function handle(msg) {
     case 'rpc':
       settleCall(msg);
       break;
+    case 'startup_error':
+      engineFailed(new Error(String(msg.message || 'Syllune could not finish starting. Retry or open logs.')));
+      break;
     case 'quit':
       quit();
       break;
@@ -539,7 +618,9 @@ function openHub(page) {
     if (hub.isMinimized()) hub.restore();
     hub.show();
     hub.focus();
-    hub.webContents.send('hub:navigate', page);
+    const navigate = () => { if (alive(hub)) hub.webContents.send('hub:navigate', page); };
+    if (hub.webContents.isLoadingMainFrame()) hub.webContents.once('did-finish-load', navigate);
+    else navigate();
     return;
   }
   hub = new BrowserWindow({
@@ -564,6 +645,7 @@ function openHub(page) {
   hub.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   hub.loadFile(path.join(__dirname, 'hub', 'index.html'), { query: { page } });
   hub.once('ready-to-show', () => hub.show());
+  hub.webContents.on('render-process-gone', () => { if (alive(hub)) hub.reload(); });
   hub.on('closed', () => { hub = null; });
 }
 

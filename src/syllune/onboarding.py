@@ -10,7 +10,7 @@ import sys
 import webbrowser
 
 from .platform import app
-from .terminal_ui import BOLD_GREEN, BOLD_RED, RESET, prompt_choice
+from .terminal_ui import BOLD_GREEN, BOLD_RED, RESET, prompt_choice, can_prompt
 from .utils import restart_or_exit
 
 INSTALL_GPU = 1
@@ -55,7 +55,7 @@ def handle_gpu_failure(error, config_manager):
     # Windowless launch (pythonw / autostart): no keyboard can answer the
     # prompt, so waiting on it would hang startup. Use CPU for this session,
     # as choosing "Fall back to CPU" would; the next console launch asks again.
-    if sys.stdin is None:
+    if not can_prompt():
         logger.warning("No console for the GPU recovery prompt; using CPU this session")
         return
 

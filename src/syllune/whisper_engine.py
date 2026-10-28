@@ -221,6 +221,9 @@ class WhisperEngine:
                     replacement = WhisperModel(model_source, device=self.device,
                                                compute_type=self.compute_type)
                     self.model, self.model_key = replacement, new_model_key
+                    self._warmup()
+                    if self.language_model_keys and not self.language_model_instances:
+                        self._load_language_models()
                     terminal_message = "Model ready!"
                 except Exception as error:
                     self.last_model_error = str(error) or error.__class__.__name__

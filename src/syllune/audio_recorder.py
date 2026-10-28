@@ -182,8 +182,10 @@ class AudioRecorder:
                 default_input = sd.query_devices(kind='input')
                 self.logger.info(f"Default source: {default_input['name']}")
         except Exception as e:
-            self.logger.error(f"Audio source test failed: {e}")
-            raise
+            # Setup and Settings must remain available on an undocked laptop
+            # or when microphone access is denied. The capture loop records the
+            # device error and the default-device watcher can recover later.
+            self.logger.warning(f"Microphone unavailable at startup: {e}")
 
     def _start_capture(self):
         self._capture_running = True
@@ -277,6 +279,8 @@ class AudioRecorder:
             return False
 
         self.logger.info("Starting audio recording...")
+        if self.continuous_streaming is None and self.streaming_manager:
+            self.continuous_streaming = self._setup_continuous_streaming()
         self.recording_start_time = time.time()
 
         if self.continuous_vad:

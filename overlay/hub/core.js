@@ -401,7 +401,6 @@ const Hub = (() => {
 
   function start(firstPage) {
     for (const item of navItems) item.addEventListener('click', () => navigate(item.dataset.page));
-    window.hub.onNavigate(navigate);
     window.hub.onEvent((name) => currentPage?.onEvent?.(name));
     window.addEventListener('beforeunload', () => currentPage?.leave?.());
     document.addEventListener('keydown', (event) => {
@@ -411,6 +410,7 @@ const Hub = (() => {
       }
     });
     navigate(firstPage);
+    window.hub.onNavigate(navigate);
     // The highlight is placed without motion first, then slides from then on.
     requestAnimationFrame(() => requestAnimationFrame(() => nav.classList.add('animated')));
   }

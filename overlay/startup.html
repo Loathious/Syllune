@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- A visible launch and recovery surface while the private engine starts.
+     Errors leave Retry and diagnostics available instead of closing the app. -->
+<html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:">
+<title>Syllune</title><style>
+  :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101929;color:#eef3fa}
+  body{margin:0;min-height:320px;display:grid;place-items:center}
+  main{max-width:400px;padding:48px 40px;width:calc(100% - 80px)}
+  img{width:48px;height:48px}h1{font-size:24px;font-weight:600;margin:20px 0 10px}
+  p{font-size:14px;line-height:1.6;color:#a4b3c9;margin:0 0 24px}
+  nav{display:flex;gap:10px;flex-wrap:wrap}button{font:inherit;font-size:13px;padding:9px 16px;border-radius:8px;border:1px solid #37435a;background:#202d43;color:#eef3fa;cursor:pointer}
+  button:hover{background:#2c3c56}button:focus-visible{outline:2px solid #90baff;outline-offset:3px}
+  [hidden]{display:none}
+</style></head><body><main>
+<img src="assets/syllune.png" alt=""><h1 id="title">Starting Syllune…</h1>
+<p id="message" role="status" aria-live="polite">Preparing your microphone and local speech engine.</p>
+<nav id="recovery" hidden><button id="retry">Retry</button><button id="logs">Open logs</button><button id="quit">Quit</button></nav>
+</main><script src="startup.js"></script></body></html>

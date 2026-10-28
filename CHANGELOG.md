@@ -2,6 +2,19 @@
 
 All notable changes to Syllune. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.1] - 2026-10-28
+
+### Fixed
+- The Windows app keeps a visible startup window until the engine connects. Startup failures show Retry and Open logs instead of silently closing.
+- Opening the desktop or Start menu shortcut again brings the existing app forward without starting another engine.
+- Saved GPU settings fall back to CPU for the session if the optional CUDA runtime is missing. Windowless launches never wait for console answers.
+- Speech models and optional streaming prepare after the GUI starts. Per-language speech models remain available, and an unavailable microphone no longer prevents setup from opening.
+- Setup navigation survives slow initial requests, including an existing installation with missing model files.
+
+### Packaging
+- Version 0.24.1 in both the Windows app and speech engine.
+- Added explicit trusted-certificate signing and verification for releases, plus local Microsoft Store packaging preparation. Public Windows trust still requires a verified publisher or certified Store distribution.
+
 ## [0.24.0] - 2026-10-28
 
 The first Syllune release.
