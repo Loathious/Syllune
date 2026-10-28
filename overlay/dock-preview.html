@@ -1,0 +1,21 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Syllune dock preview</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<style>
+html, body {margin:0; width:100%; height:100%; overflow:hidden; background:transparent; pointer-events:none}
+.dock {box-sizing:border-box; width:100%; height:100%; border:1px solid #86acd87a; border-radius:999px; background:#17243b66; display:flex; align-items:center; justify-content:center; gap:4px; transition:background 100ms,border-color 100ms}
+.dock.selected {background:#17243be8; border:2px solid #d8e2ee}
+.dock i {display:block; width:3px; height:10px; background:#d8e2eeaa; border-radius:2px}
+.dock i:nth-child(2n) {height:18px}
+.dock.side {flex-direction:column}
+.dock.side i {height:3px; width:10px}
+.dock.side i:nth-child(2n) {width:18px}
+@media(prefers-reduced-motion:reduce) {.dock {transition:none}}
+</style></head><body aria-hidden="true"><div class="dock" id="dock"><i></i><i></i><i></i><i></i><i></i></div>
+<script>
+// The native window supplies geometry; this document paints only its offer.
+// The main process shares candidate selection with release.
+const dock=document.getElementById('dock');
+dock.classList.toggle('side',new URLSearchParams(location.search).get('position')!=='bottom-center');
+window.dockPreview.onHighlight(value=>dock.classList.toggle('selected',value));
+</script></body></html>

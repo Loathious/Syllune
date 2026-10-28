@@ -1,0 +1,813 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Syllune</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  .accessible {position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; pointer-events:none}
+</style>
+</head>
+<body>
+<canvas id="c" role="img" aria-label="Syllune dictation"></canvas>
+<div class="accessible" id="status" role="status" aria-live="polite"></div>
+<div class="accessible" id="actions"></div>
+<script src="dock-geometry.js"></script>
+<script>
+// pill.html
+// The dictation pill: a small capsule resting at the screen edge that grows
+// into a live voice meter while you talk, folds into a quiet ripple while the
+// text is prepared, and settles back. One canvas; every geometric property is
+// a spring, so any state can interrupt any other mid-motion. When nothing
+// moves the frame loop stops, so the resting pill costs nothing.
+
+// --- Motion -------------------------------------------------------------------
+
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+// A damped spring set with Apple-style parameters: perceived duration in
+// seconds and bounce (0 = no overshoot).
+class Spring {
+  constructor(value, duration, bounce = 0) {
+    this.x = value; this.v = 0; this.target = value;
+    this.configure(duration, bounce);
+  }
+  configure(duration, bounce = 0) {
+    this.k = (2 * Math.PI / duration) ** 2;
+    this.c = 4 * Math.PI * (1 - bounce) / duration;
+  }
+  step(dt) {
+    this.v += (-this.k * (this.x - this.target) - this.c * this.v) * dt;
+    this.x += this.v * dt;
+  }
+  get resting() { return Math.abs(this.x - this.target) < 0.01 && Math.abs(this.v) < 0.05; }
+}
+
+const S = {
+  w: new Spring(38, 0.36, 0.2),      // pill size: a touch of life when it grows
+  h: new Spring(7, 0.36, 0.2),
+  alpha: new Spring(0, 0.24),
+  rise: new Spring(8, 0.4),          // offset toward the screen edge while hidden
+  shake: new Spring(0, 0.32, 0.55),  // sideways nudge on errors
+  press: new Spring(1, 0.16),        // scale while the pill is pressed
+  body: new Spring(0.72, 0.24),      // body opacity: the resting pill is quieter
+  pitch: new Spring(6.5, 0.36),      // bar spacing: tighter while working
+  meter: new Spring(0, 0.22),        // layer opacities (timing set per direction below)
+  work: new Spring(0, 0.36),         // 0 = voice bars, 1 = working ripple
+  check: new Spring(0, 0.22),
+  text: new Spring(0, 0.22),
+  controls: new Spring(0, 0.22),
+  hint: new Spring(0, 0.22),
+  note: new Spring(0, 0.3),          // tint blend for note recordings
+  meeting: new Spring(0, 0.22),
+  mstop: new Spring(0, 0.18),
+  hub: new Spring(0, 0.18),
+};
+
+// Content layers leave faster than they arrive, so the outgoing content is
+// gone before the incoming content becomes legible: two layers never read at
+// once in the middle of a morph.
+const LAYERS = ['meter', 'check', 'text', 'controls', 'hint', 'meeting', 'mstop', 'hub'];
+const CENTER_LAYERS = ['meter', 'check', 'text', 'hint', 'meeting'];
+const LAYER_ENTER_S = 0.22, LAYER_EXIT_S = 0.1, HINT_EXIT_S = 0.07;
+const leaving = (name) => S[name].target < S[name].x;
+function timeLayers() {
+  for (const name of LAYERS) {
+    const exit = name === 'hint' ? HINT_EXIT_S : LAYER_EXIT_S;
+    S[name].configure(leaving(name) ? exit : LAYER_ENTER_S);
+  }
+}
+
+// Opacity of a centre layer after the handover: one arriving stays hidden
+// until whatever is leaving that spot is all but gone (its own spring keeps
+// running meanwhile, so it still lands on time). No frame shows both.
+function centerOpacity(name) {
+  const own = Math.min(1, Math.max(0, S[name].x));
+  if (leaving(name)) return own;
+  const outgoing = Math.max(0, ...CENTER_LAYERS.filter(leaving).map((n) => Math.min(1, S[n].x)));
+  return own * (1 - smoothstep(0.02, 0.15, outgoing));
+}
+
+function applyReducedMotion() {
+  // Fewer, gentler moves: sizes settle without overshoot, nothing shakes or
+  // slides, and the working ripple only changes brightness.
+  const bounce = reducedMotion.matches ? 0 : 0.2;
+  S.w.configure(0.3, bounce);
+  S.h.configure(0.3, bounce);
+  window.bridge.setReducedMotion(reducedMotion.matches);
+}
+reducedMotion.addEventListener('change', applyReducedMotion);
+applyReducedMotion();
+
+// cubic-bezier timing function, solved the way CSS does it.
+function cubicBezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const curveX = (t) => ((ax * t + bx) * t + cx) * t;
+  const curveY = (t) => ((ay * t + by) * t + cy) * t;
+  const slopeX = (t) => (3 * ax * t + 2 * bx) * t + cx;
+  return (x) => {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    let t = x;
+    for (let i = 0; i < 8; i++) {
+      const error = curveX(t) - x;
+      if (Math.abs(error) < 1e-5) return curveY(t);
+      const slope = slopeX(t);
+      if (Math.abs(slope) < 1e-6) break;
+      t -= error / slope;
+    }
+    let lo = 0, hi = 1;
+    t = x;
+    while (hi - lo > 1e-5) {
+      if (curveX(t) < x) lo = t; else hi = t;
+      t = (lo + hi) / 2;
+    }
+    return curveY(t);
+  };
+}
+const easeOut = cubicBezier(0.23, 1, 0.32, 1);
+
+const clamp = (v, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, v));
+const smoothstep = (a, b, v) => { const t = clamp((v - a) / (b - a)); return t * t * (3 - 2 * t); };
+
+// --- Look ---------------------------------------------------------------------
+
+const WHITE = [216, 226, 238];       // Syllune silver
+const VIOLET = [196, 181, 253];      // note recordings
+const GREEN = [134, 239, 172];
+const STOP_RED = [248, 113, 113];
+const ERROR_TEXT = [254, 202, 202];  // soft: most "errors" are just "didn't catch that"
+const AMBER = [253, 224, 150];
+const FONT = '500 12px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif';
+const HINT = 'Click to dictate';
+
+const EDGE_GAP = DockGeometry.EDGE_GAP; // shared with native previews
+const REST = { w: 38, h: 7 };
+const ACTIVE_H = DockGeometry.ACTIVE_THICKNESS;
+const LISTEN_W = DockGeometry.ACTIVE_LENGTH, LOCKED_W = 152, WORKING_W = 80, ROUND_W = 34;
+const BAND_COUNT = 6;
+const BAR_COUNT = BAND_COUNT * 2 - 1; // mirrored, lowest band in the middle
+const BAR_W = 3, DOT = 3;
+const LISTEN_PITCH = 6.5, WORKING_PITCH = 5;
+const RIPPLE_MS = 1100;
+const CHECK_DRAW_MS = 260;
+const CHECK_DELAY_MS = 70;           // let the ripple clear before the stroke starts
+
+const mixColor = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+
+// --- State --------------------------------------------------------------------
+
+let mode = 'rest';                   // rest | listen | processing | success | saved | error
+let noteMode = false, locked = false;
+let message = '', noticeText = '', noticeUntil = 0;
+// 'center', or 'left'/'right' when the pill sits on that side of the screen.
+let idlePill = true, gameMode = false, align = 'center';
+let meetingSince = null, meetingTick = null;
+let pendingCount = 0, dragStart = null, dragLast = null, dragging = false;
+let hovering = false, mouse = null, hoverTarget = null, pressedOn = null;
+let workSince = 0, checkSince = 0;
+let restTimer = null;
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const sideDock = () => align !== 'center';
+const logicalWidth = () => sideDock() ? innerHeight : innerWidth;
+const logicalHeight = () => sideDock() ? innerWidth : innerHeight;
+
+// A logical horizontal canvas is rotated as a whole for the side waveform.
+// Pointer coordinates use its exact inverse; icons counter-rotate upright.
+function logicalPoint(point) {
+  if (align === 'left') return {x:point.y, y:innerWidth - point.x};
+  if (align === 'right') return {x:innerHeight - point.y, y:point.x};
+  return point;
+}
+function physicalRect(rect) {
+  if (align === 'left') return {x:innerWidth-rect.y-rect.h, y:rect.x, w:rect.h, h:rect.w};
+  if (align === 'right') return {x:rect.y, y:innerHeight-rect.x-rect.w, w:rect.h, h:rect.w};
+  return rect;
+}
+
+const widthCache = new Map();
+function textWidth(t) {
+  if (!widthCache.has(t)) { ctx.font = FONT; widthCache.set(t, ctx.measureText(t).width); }
+  return widthCache.get(t);
+}
+// Pill width for a label plus its padding (and checkmark), capped to the window.
+const MAX_W = 380;
+const labelWidth = (label, extra) => Math.min(MAX_W, textWidth(label) + extra);
+
+function setMode(next) {
+  clearTimeout(restTimer);
+  mode = next;
+  const now = performance.now();
+  if (next !== 'listen') noticeText = '';
+  if (next === 'processing') workSince = now;
+  if (next === 'success' || next === 'saved') checkSince = now + CHECK_DELAY_MS;
+  wake();
+}
+
+function restAfter(ms) {
+  clearTimeout(restTimer);
+  restTimer = setTimeout(() => setMode('rest'), ms);
+}
+
+// --- Voice meter --------------------------------------------------------------
+// The engine sends each band's loudness in dB. Bars are scaled against a
+// loudness reference that follows your voice (fast up, slow down), so a quiet
+// mic still fills them, and a gate on the overall level keeps them flat while
+// you're silent.
+
+const RANGE_DB = 34;
+const voice = {
+  bandsDb: null,
+  rms: 0,
+  referenceDb: -30,                  // kept between recordings: the next one starts calibrated
+  shown: new Float32Array(BAND_COUNT),
+};
+
+function updateVoice(dt) {
+  const bands = mode === 'listen' ? voice.bandsDb : null;
+  let gate = 0;
+  if (bands) {
+    const peak = Math.max(...bands);
+    if (peak > voice.referenceDb) voice.referenceDb += (peak - voice.referenceDb) * Math.min(1, dt * 10);
+    else voice.referenceDb -= Math.min(voice.referenceDb - peak, 3 * dt);
+    voice.referenceDb = clamp(voice.referenceDb, -50, -14);
+    gate = smoothstep(0.0025, 0.007, voice.rms);
+  }
+  const floor = voice.referenceDb - RANGE_DB;
+  for (let i = 0; i < BAND_COUNT; i++) {
+    const target = bands ? gate * clamp((bands[i] - floor) / RANGE_DB) ** 1.5 : 0;
+    // Meter ballistics: rise in ~35 ms, fall in ~120 ms.
+    const tau = target > voice.shown[i] ? 0.035 : 0.12;
+    voice.shown[i] += (target - voice.shown[i]) * (1 - Math.exp(-dt / tau));
+  }
+}
+
+// --- Engine messages ----------------------------------------------------------
+
+window.bridge.onState((msg) => {
+  switch (msg.state) {
+    case 'recording':
+      noteMode = !!msg.note; locked = false; message = '';
+      voice.bandsDb = null; voice.rms = 0; voice.shown.fill(0);
+      setMode('listen');
+      break;
+    case 'locked': locked = !!msg.value; wake(); break;
+    case 'processing': setMode('processing'); break;
+    case 'success': setMode('success'); restAfter(620); break;
+    case 'note_saved':
+      message = 'Note saved'; setMode('saved'); restAfter(1500); break;
+    case 'meeting_ready':
+      if (mode !== 'listen' && mode !== 'processing') {
+        message = 'Meeting notes ready'; setMode('saved'); restAfter(1500);
+      }
+      break;
+    case 'error':
+      message = msg.message || 'Something went wrong';
+      setMode('error');
+      if (!reducedMotion.matches) S.shake.v -= 120;
+      restAfter(2600);
+      break;
+    case 'notice':
+      noticeText = msg.message || ''; noticeUntil = performance.now() + 2800;
+      wake();
+      setTimeout(wake, 2810);
+      break;
+    case 'hidden': setMode('rest'); break;
+  }
+});
+
+window.bridge.onLevel((level) => {
+  voice.rms = level.v || 0;
+  voice.bandsDb = Array.isArray(level.bands) && level.bands.length === BAND_COUNT ? level.bands : null;
+});
+
+window.bridge.onConfig((config) => {
+  if ('idlePill' in config) idlePill = config.idlePill;
+  if ('gameMode' in config) gameMode = config.gameMode;
+  if ('align' in config) {
+    const next = config.align === 'left' || config.align === 'right' ? config.align : 'center';
+    if (next !== align) { align = next; lastHitKey = ''; mouse = null; hovering = false; }
+  }
+  if ('meetingSince' in config) meetingSince = config.meetingSince;
+  if ('pendingCount' in config) pendingCount = config.pendingCount;
+  clearTimeout(meetingTick);
+  wake();
+});
+
+// --- Pointer ------------------------------------------------------------------
+// The window only receives the mouse while main.js sees the cursor over the
+// pill (see setHitRect below); clicks never take focus from your app.
+
+window.bridge.onHover((inside) => {
+  hovering = inside;
+  if (!inside && !dragging) { mouse = null; hoverTarget = null; pressedOn = null; S.press.target = 1; }
+  wake();
+});
+
+canvas.addEventListener('mousemove', (e) => { mouse = logicalPoint({ x: e.clientX, y: e.clientY }); wake(); });
+canvas.addEventListener('mouseleave', () => { mouse = null; wake(); });
+canvas.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  mouse = logicalPoint({x:event.clientX, y:event.clientY});
+  hoverTarget = findHoverTarget(layout(performance.now()));
+  pressedOn = hoverTarget;
+  // A body can be dragged while listening; controls always retain their click.
+  if (pressedOn && ['pill', 'body', 'pending', 'meeting'].includes(pressedOn)) {
+    dragStart = dragLast = {x: event.screenX, y: event.screenY};
+    canvas.setPointerCapture?.(event.pointerId);
+  }
+  if (pressedOn === 'pill') S.press.target = 0.96;
+  wake();
+});
+canvas.addEventListener('pointermove', (event) => {
+  mouse = logicalPoint({x:event.clientX, y:event.clientY});
+  if (!dragStart) return;
+  const point = {x: event.screenX, y: event.screenY};
+  if (!dragging && Math.hypot(point.x - dragStart.x, point.y - dragStart.y) > 6) dragging = true;
+  if (dragging) {
+    window.bridge.pillDrag({x: point.x - dragLast.x, y: point.y - dragLast.y});
+    dragLast = point;
+  }
+});
+canvas.addEventListener('pointerup', (event) => {
+  mouse = logicalPoint({x:event.clientX, y:event.clientY});
+  hoverTarget = findHoverTarget(layout(performance.now()));
+  const released = pressedOn;
+  const wasDragging = dragging;
+  if (wasDragging) window.bridge.pillDragEnd();
+  dragging = false; dragStart = dragLast = null;
+  if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  pressedOn = null;
+  S.press.target = 1;
+  if (!wasDragging && released && released === hoverTarget) {
+    const action = { pill: 'dictate', stop: 'stop', cancel: 'cancel', meeting: 'meeting_open', meetingStop: 'meeting_stop', hub: 'open_hub', pending: 'pending_open' }[released];
+    if (action) window.bridge.pillAction(action);
+  }
+  wake();
+});
+
+// Interrupted capture must never leave previews or a pressed control behind.
+function cancelDrag(notify = true) {
+  if (notify && dragging) window.bridge.pillDragCancel();
+  dragging = false; dragStart = dragLast = null;
+  pressedOn = null; S.press.target = 1;
+  wake();
+}
+canvas.addEventListener('pointercancel', () => cancelDrag());
+canvas.addEventListener('lostpointercapture', () => { if (dragStart) cancelDrag(); });
+addEventListener('blur', () => cancelDrag());
+addEventListener('pagehide', () => cancelDrag());
+addEventListener('keydown', event => { if (event.key === 'Escape' && dragStart) cancelDrag(); });
+window.bridge.onDragCancelled(() => cancelDrag(false));
+
+// --- Layout -------------------------------------------------------------------
+
+const restVisible = () => (idlePill || meetingSince !== null || pendingCount > 0) && !gameMode;
+const currentHint = () => pendingCount ? (hovering ? `Click a text field · ${pendingCount} waiting` : `${pendingCount} waiting`) : HINT;
+const meetingVisible = () => meetingSince !== null && !gameMode;
+// Fixed templates prevent the capsule from moving sideways every second.
+function meetingClock() {
+  const seconds = Math.max(0, Math.floor((Date.now() - meetingSince) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
+    : `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+// What the pill should look like right now; the springs chase these values.
+function layout(now) {
+  const notice = mode === 'listen' && noticeText && now < noticeUntil;
+  const active = { h: ACTIVE_H, alpha: 1, rise: 0, body: 0.94 };
+  const t = {
+    w: REST.w, h: REST.h, alpha: restVisible() ? 1 : 0, rise: restVisible() ? 0 : 8, body: 0.72,
+    pitch: S.pitch.target, work: S.work.target,
+    meter: 0, check: 0, text: 0, controls: 0, hint: 0, meeting: 0, mstop: 0, hub: 0, label: '', labelColor: null, notice,
+  };
+  switch (mode) {
+    case 'rest':
+      if (meetingVisible()) Object.assign(t, {
+        w: textWidth(meetingClock().length > 5 ? '00:00:00' : '00:00') + (hovering ? 66 : 40),
+        h: 26, meeting: 1, mstop: hovering ? 1 : 0, body: 0.94,
+      });
+      else if (restVisible() && (hovering || pendingCount)) Object.assign(t, {
+        w: textWidth(currentHint()) + (hovering ? 64 : 36), h: 28, hint: 1, body: 0.94, hub: hovering ? 1 : 0,
+      });
+      break;
+    case 'listen':
+      Object.assign(t, active);
+      if (notice) Object.assign(t, { w: labelWidth(noticeText, 36), text: 1, label: noticeText, labelColor: AMBER });
+      else Object.assign(t, { w: locked ? LOCKED_W : LISTEN_W, meter: 1, work: 0, pitch: LISTEN_PITCH, controls: locked ? 1 : 0 });
+      break;
+    case 'processing':
+      Object.assign(t, active, { w: WORKING_W, meter: 1, work: 1, pitch: WORKING_PITCH });
+      break;
+    case 'success':
+      Object.assign(t, active, { w: ROUND_W, check: 1 });
+      break;
+    case 'saved':
+      Object.assign(t, active, { w: labelWidth(message, 62), check: 1, text: 1, label: message });
+      break;
+    case 'error':
+      Object.assign(t, active, { w: labelWidth(message, 36), text: 1, label: message, labelColor: ERROR_TEXT });
+      break;
+  }
+  // Side capsules never contain a status label, elapsed time or app name.
+  // The waveform becomes vertical; recognizable action icons remain upright.
+  if (sideDock()) {
+    if (mode === 'rest' && meetingVisible()) Object.assign(t, {w:hovering ? 104 : 72, h:30});
+    else if (mode === 'rest' && restVisible() && (hovering || pendingCount)) Object.assign(t, {w:hovering ? 92 : 56, h:30});
+    else if (mode === 'error' || mode === 'saved' || notice) Object.assign(t, {w:48, h:34});
+    t.label = '';
+  }
+  t.w = Math.min(t.w, Math.max(34, logicalWidth() - 16));
+  t.h = Math.min(t.h, Math.max(7, logicalHeight() - EDGE_GAP));
+  return t;
+}
+
+function pillCenterY(h, rise) {
+  return logicalHeight() - Math.min(EDGE_GAP, Math.max(0, logicalHeight() - h)) - h / 2 + rise;
+}
+
+// On a side the pill keeps its edge against the screen and grows inward;
+// at the bottom it grows out from the middle.
+function pillCenterX(w) { return logicalWidth() / 2; }
+
+// The clickable area, from the layout targets (not the animated values), so
+// the hover region doesn't wobble while the pill moves.
+let lastHitKey = '';
+function reportHitRect(t) {
+  let rect = null;
+  const cx = pillCenterX(t.w);
+  if (mode === 'rest' && (meetingVisible() || (pendingCount && restVisible()))) {
+    const cy = pillCenterY(t.h, 0);
+    rect = { x: cx - t.w / 2 - 4, y: cy - t.h / 2 - 4, w: t.w + 8, h: t.h + 8 };
+  } else if (mode === 'rest' && restVisible()) {
+    const restCy = pillCenterY(REST.h, 0);
+    const restCx = pillCenterX(REST.w);
+    rect = { x: restCx - 36, y: restCy - 13, w: 72, h: 26 };
+    // Hovered, it also covers the expanded pill. The resting area stays
+    // included so a cursor near the edge can't flicker between the two.
+    if (hovering) {
+      const cy = pillCenterY(t.h, 0);
+      const top = Math.min(rect.y, cy - t.h / 2 - 5), bottom = Math.max(rect.y + rect.h, cy + t.h / 2 + 5);
+      const half = Math.max(36, t.w / 2 + 4);
+      const left = Math.min(rect.x, cx - half), right = Math.max(rect.x + rect.w, cx + half);
+      rect = { x: left, y: top, w: right - left, h: bottom - top };
+    }
+  } else if (mode !== 'rest' && t.alpha) {
+    const cy = pillCenterY(t.h, 0);
+    rect = { x: cx - t.w / 2 - 4, y: cy - t.h / 2 - 4, w: t.w + 8, h: t.h + 8 };
+  }
+  if (rect) rect = physicalRect(rect);
+  if (rect) rect = { x: Math.round(rect.x), y: Math.round(rect.y), w: Math.round(rect.w), h: Math.round(rect.h) };
+  const key = rect ? `${rect.x},${rect.y},${rect.w},${rect.h}` : '';
+  if (key !== lastHitKey) {
+    lastHitKey = key;
+    window.bridge.setHitRect(rect);
+  }
+}
+
+// Which control is under the cursor: the resting pill, or the hands-free
+// stop/cancel buttons.
+function findHoverTarget(t) {
+  if (!hovering || !mouse) return null;
+  if (mode === 'rest' && meetingVisible()) {
+    const stopX = pillCenterX(t.w) + t.w / 2 - 16;
+    return mouse.x > stopX - 12 ? 'meetingStop' : 'meeting';
+  }
+  if (mode === 'rest' && restVisible()) {
+    if (mouse.x > pillCenterX(t.w) + t.w / 2 - 30) return 'hub';
+    return pendingCount ? 'pending' : 'pill';
+  }
+  if (mode === 'listen' && locked && !t.notice) {
+    const cx = pillCenterX(t.w), cy = pillCenterY(t.h, 0);
+    const near = (x) => Math.hypot(mouse.x - x, mouse.y - cy) <= 14;
+    if (near(cx - t.w / 2 + 18)) return 'cancel';
+    if (near(cx + t.w / 2 - 18)) return 'stop';
+  }
+  return mode !== 'rest' ? 'body' : null;
+}
+
+// Native upright tooltips carry the words omitted from vertical capsules.
+// Semantic controls give assistive technology the same status and action names.
+const actionNames = {pill:'Start dictation', stop:'Stop dictation', cancel:'Cancel dictation', meeting:'Open meeting', meetingStop:'Stop meeting', hub:'Open Syllune', pending:'Open waiting dictations', body:'Drag to move'};
+let semanticKey = '';
+function updateAccessibility(t) {
+  const status = mode === 'rest' ? (meetingVisible() ? `Meeting recording, ${meetingClock()}` : pendingCount ? `${pendingCount} dictations waiting for a text field` : 'Ready to dictate')
+    : mode === 'listen' ? (t.notice ? noticeText : locked ? 'Hands-free dictation recording' : 'Dictation recording')
+    : mode === 'processing' ? 'Preparing dictation' : mode === 'error' ? message : mode === 'saved' ? message : 'Dictation inserted';
+  const labels = mode === 'rest' ? (meetingVisible() ? ['meeting','meetingStop'] : pendingCount ? ['pending','hub'] : ['pill','hub']) : mode === 'listen' && locked && !t.notice ? ['cancel','stop'] : [];
+  const key = `${status}|${labels.join(',')}`;
+  if (key !== semanticKey) {
+    semanticKey = key;
+    document.getElementById('status').textContent = status;
+    const actions = document.getElementById('actions');
+    actions.replaceChildren(...labels.map(id => {
+      const button = document.createElement('button');
+      button.textContent = actionNames[id]; button.setAttribute('aria-label', actionNames[id]);
+      button.addEventListener('click', () => window.bridge.pillAction({pill:'dictate',stop:'stop',cancel:'cancel',meeting:'meeting_open',meetingStop:'meeting_stop',hub:'open_hub',pending:'pending_open'}[id]));
+      return button;
+    }));
+  }
+  canvas.title = `${hoverTarget && hoverTarget !== 'body' ? actionNames[hoverTarget] + ' · ' : ''}${status}${mode === 'rest' ? ' · Drag to move' : ''}`;
+  canvas.setAttribute('aria-label', canvas.title);
+}
+
+// --- Drawing ------------------------------------------------------------------
+
+let dpr = 1;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(innerWidth * dpr);
+  canvas.height = Math.round(innerHeight * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  lastHitKey = '';
+  wake();
+}
+// Moving to a monitor with another scale changes the pixel ratio without a resize.
+function watchPixelRatio() {
+  matchMedia(`(resolution: ${dpr}dppx)`).addEventListener('change', () => { resize(); watchPixelRatio(); }, { once: true });
+}
+addEventListener('resize', resize);
+
+function draw(now, t) {
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  const alpha = clamp(S.alpha.x);
+  if (alpha < 0.004) return;
+
+  ctx.save();
+  if (align === 'left') {ctx.translate(innerWidth, 0); ctx.rotate(Math.PI / 2);}
+  if (align === 'right') {ctx.translate(0, innerHeight); ctx.rotate(-Math.PI / 2);}
+
+  const h = Math.max(4, S.h.x);
+  const w = Math.max(h, S.w.x);      // never narrower than tall, even mid-bounce
+  const cx = pillCenterX(w) + S.shake.x;
+  const cy = pillCenterY(h, S.rise.x);
+  const x = cx - w / 2, y = cy - h / 2, r = h / 2;
+  // Bars sit on whole device pixels once nothing is sliding sideways.
+  const still = S.shake.resting && S.pitch.resting;
+  const snap = (v) => (still ? Math.round(v * dpr) / dpr : v);
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const scale = S.press.x;
+  ctx.translate(cx, cy); ctx.scale(scale, scale); ctx.translate(-cx, -cy);
+
+  // Body: dark glass with a soft shadow that grows with the pill.
+  const size = clamp((h - REST.h) / (ACTIVE_H - REST.h));
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.34)';
+  ctx.shadowBlur = 6 + 12 * size;
+  ctx.shadowOffsetY = 3 + 3 * size;
+  ctx.fillStyle = `rgba(23,36,59,${clamp(S.body.x)})`;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.fill();
+  ctx.restore();
+
+  // Hairline edge, brighter on top like light falling on glass.
+  const edgeLight = ctx.createLinearGradient(0, y, 0, y + h);
+  edgeLight.addColorStop(0, 'rgba(255,255,255,0.17)');
+  edgeLight.addColorStop(1, 'rgba(255,255,255,0.05)');
+  ctx.strokeStyle = edgeLight; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, Math.max(0, r - 0.5)); ctx.stroke();
+
+  // Each layer shows only while it physically fits the pill as it is this
+  // frame, so nothing is ever clipped by, or drawn over, a morphing neighbour.
+  const meterSpan = (BAR_COUNT - 1) * S.pitch.x + BAR_W;
+  const meterOpacity = centerOpacity('meter') * clamp((w - meterSpan - 10) / 12) * clamp((h - 16) / 8);
+  const controlsOpacity = clamp(S.controls.x) * clamp((w - meterSpan - 56) / 16);
+  const checkOpacity = centerOpacity('check') * clamp((h - 18) / 8);
+
+  ctx.save();
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, r); ctx.clip();
+  drawMeter(cx, cy, h, now, meterOpacity, snap);
+  drawControls(x, w, cy, controlsOpacity);
+  if (sideDock()) drawSideContent(cx, cy, w, now, t, checkOpacity);
+  else { drawContent(cx, cy, w, now, t, checkOpacity); drawMeeting(cx, cy, w); }
+  if (S.hub.x > 0.01) {
+    const hx = cx + w / 2 - 19;
+    uprightAt(hx, cy, () => {
+      ctx.strokeStyle = rgba(WHITE, clamp(S.hub.x) * .75);
+      ctx.lineWidth = 1.3; ctx.lineCap = 'round'; ctx.beginPath();
+      for (const yy of [-3, 1, 5]) {ctx.moveTo(-4, yy); ctx.lineTo(4, yy);}
+      ctx.stroke();
+    });
+  }
+  ctx.restore();
+
+  ctx.restore();
+
+  ctx.restore();
+}
+
+// Counter-rotate only the glyph, leaving the vertical capsule and meter alone.
+function uprightAt(x, y, paint) {
+  ctx.save(); ctx.translate(x, y);
+  if (align === 'left') ctx.rotate(-Math.PI / 2);
+  if (align === 'right') ctx.rotate(Math.PI / 2);
+  paint(); ctx.restore();
+}
+
+function drawSideContent(cx, cy, w, now, t, checkOpacity) {
+  if (checkOpacity > .01) uprightAt(cx, cy, () => drawCheck(0, 0, checkOpacity, mode === 'saved' ? VIOLET : GREEN, now));
+  if ((mode === 'error' || t.notice) && S.text.x > .01) uprightAt(cx, cy, () => {
+    ctx.strokeStyle=rgba(t.notice ? AMBER : ERROR_TEXT, clamp(S.text.x)); ctx.lineWidth=1.6;
+    ctx.beginPath(); ctx.arc(0,0,7,0,2*Math.PI); ctx.moveTo(0,-4); ctx.lineTo(0,1); ctx.stroke();
+    ctx.fillStyle=ctx.strokeStyle; ctx.beginPath(); ctx.arc(0,4,1,0,2*Math.PI); ctx.fill();
+  });
+  const meetingOpacity = centerOpacity('meeting');
+  if (meetingOpacity > .01) {
+    ctx.fillStyle=rgba(STOP_RED, meetingOpacity);
+    ctx.beginPath(); ctx.arc(cx - 12 * clamp(S.mstop.x),cy,3.5,0,2*Math.PI); ctx.fill();
+    if (S.mstop.x > .01) {ctx.fillStyle=rgba(STOP_RED,clamp(S.mstop.x)*meetingOpacity); ctx.beginPath();ctx.roundRect(cx+w/2-20,cy-4,8,8,2);ctx.fill();}
+  }
+  const hintOpacity = centerOpacity('hint');
+  if (hintOpacity > .01) uprightAt(cx - 12*clamp(S.hub.x), cy, () => {
+    ctx.strokeStyle=rgba(WHITE, .85*hintOpacity); ctx.lineWidth=1.5;ctx.lineCap='round';ctx.lineJoin='round';ctx.beginPath();
+    if (pendingCount) {
+      ctx.roundRect(-7,-5,14,10,2);ctx.moveTo(-7,-2);ctx.lineTo(-3,-2);ctx.lineTo(-1,1);ctx.lineTo(2,1);ctx.lineTo(4,-2);ctx.lineTo(7,-2);
+    } else {
+      ctx.roundRect(-3,-7,6,10,3);ctx.moveTo(-6,-1);ctx.bezierCurveTo(-6,7,6,7,6,-1);ctx.moveTo(0,5);ctx.lineTo(0,8);ctx.moveTo(-3,8);ctx.lineTo(3,8);
+    }
+    ctx.stroke();
+  });
+}
+
+// Eleven bars, mirrored around the middle: the middle bar is the lowest voice
+// band, the outer ones the highest. While working, the bars become dots and a
+// soft pulse leaves the middle toward both ends, mirrored the same way, so it
+// breathes rather than scrolls.
+function drawMeter(cx, cy, h, now, opacity, snap) {
+  if (opacity < 0.01) return;
+  const maxH = Math.max(DOT, h - 18);
+  const work = clamp(S.work.x);
+  const pulseBand = (((now - workSince) / RIPPLE_MS) % 1) * (BAND_COUNT + 2) - 1;
+  const color = mixColor(WHITE, VIOLET, clamp(S.note.x));
+  for (let i = 0; i < BAR_COUNT; i++) {
+    const offset = i - (BAR_COUNT - 1) / 2;
+    const band = Math.abs(offset);
+    const voiceH = DOT + voice.shown[band] * (maxH - DOT);
+    const bump = Math.exp(-(((band - pulseBand) / 1.1) ** 2));
+    const rippleH = DOT + (reducedMotion.matches ? 0 : bump * 5);
+    const barH = voiceH + (rippleH - voiceH) * work;
+    const edgeFade = 1 - 0.4 * (band / (BAND_COUNT - 1)) ** 2;
+    const rippleAlpha = 0.35 + 0.65 * bump;
+    const a = 0.92 * opacity * edgeFade * (1 + (rippleAlpha - 1) * work);
+    ctx.fillStyle = rgba(color, a);
+    ctx.beginPath();
+    ctx.roundRect(snap(cx + offset * S.pitch.x - BAR_W / 2), cy - barH / 2, BAR_W, barH, BAR_W / 2);
+    ctx.fill();
+  }
+}
+
+// Hands-free controls: cancel on the left, stop on the right.
+function drawControls(x, w, cy, opacity) {
+  if (opacity < 0.01) return;
+  const cancelX = x + 18, stopX = x + w - 18;
+  for (const [id, px] of [['cancel', cancelX], ['stop', stopX]]) {
+    if (hoverTarget !== id) continue;
+    ctx.fillStyle = `rgba(255,255,255,${(pressedOn === id ? 0.2 : 0.12) * opacity})`;
+    ctx.beginPath(); ctx.arc(px, cy, 11, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.strokeStyle = `rgba(255,255,255,${0.62 * opacity})`;
+  ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cancelX - 3.5, cy - 3.5); ctx.lineTo(cancelX + 3.5, cy + 3.5);
+  ctx.moveTo(cancelX + 3.5, cy - 3.5); ctx.lineTo(cancelX - 3.5, cy + 3.5);
+  ctx.stroke();
+  ctx.fillStyle = rgba(STOP_RED, 0.95 * opacity);
+  ctx.beginPath(); ctx.roundRect(stopX - 4, cy - 4, 8, 8, 2); ctx.fill();
+}
+
+// Checkmark, message text and the resting hint.
+function drawContent(cx, cy, w, now, t, checkOpacity) {
+  const textOpacity = centerOpacity('text');
+  const hintOpacity = centerOpacity('hint');
+  const accent = mode === 'saved' || noteMode ? VIOLET : GREEN;
+
+  const label = t.label || (mode === 'saved' ? message : '');
+  if (checkOpacity > 0.01 && label) {
+    const startX = cx - (textWidth(label) + 24) / 2;
+    drawCheck(startX + 7, cy, checkOpacity, accent, now);
+    drawText(label, startX + 24, cy, textOpacity * fit(w, labelWidth(label, 62)), 'left', null);
+  } else {
+    drawCheck(cx, cy, checkOpacity, accent, now);
+    if (label) drawText(label, cx, cy, textOpacity * fit(w, labelWidth(label, 36)), 'center', t.labelColor);
+  }
+  if (hintOpacity > 0.01) drawText(currentHint(), cx - 12 * clamp(S.hub.x), cy,
+    0.78 * hintOpacity * fit(w, labelWidth(currentHint(), 36)), 'center', null);
+}
+
+// Text fades in only once the pill is wide enough to hold it, so it never
+// appears clipped while the pill is still growing.
+function fit(width, needed) { return clamp((width - (needed - 16)) / 16); }
+
+function drawCheck(x, cy, opacity, color, now) {
+  const progress = easeOut(clamp((now - checkSince) / CHECK_DRAW_MS));
+  if (opacity < 0.01 || progress < 0.02) return;   // a zero-length dash would draw a dot
+  const pts = [[x - 5.5, cy + 0.5], [x - 1.5, cy + 4.5], [x + 6, cy - 4.5]];
+  const total = Math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+              + Math.hypot(pts[2][0] - pts[1][0], pts[2][1] - pts[1][1]);
+  ctx.save();
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 2.2;
+  ctx.strokeStyle = rgba(color, opacity);
+  ctx.setLineDash([total * progress, total]);
+  ctx.beginPath();
+  ctx.moveTo(...pts[0]); ctx.lineTo(...pts[1]); ctx.lineTo(...pts[2]);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawText(label, x, cy, opacity, align, color) {
+  if (sideDock()) return;
+  if (opacity < 0.01 || !label) return;
+  ctx.font = FONT;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color ? rgba(color, opacity) : `rgba(255,255,255,${0.9 * opacity})`;
+  ctx.fillText(label, x, cy + 0.5);
+}
+
+// A quiet recording indicator. Only the hover stop button changes its width.
+function drawMeeting(cx, cy, w) {
+  const opacity = centerOpacity('meeting') * clamp((S.h.x - 12) / 12);
+  if (opacity < 0.01 || meetingSince === null) return;
+  const left = cx - w / 2 + 14;
+  ctx.fillStyle = rgba(STOP_RED, opacity);
+  ctx.beginPath(); ctx.arc(left, cy, 3.3, 0, Math.PI * 2); ctx.fill();
+  drawText(meetingClock(), left + 12, cy, opacity, 'left');
+  const stop = clamp(S.mstop.x) * opacity;
+  if (stop > 0.01) {
+    ctx.fillStyle = rgba(STOP_RED, stop);
+    ctx.beginPath(); ctx.roundRect(cx + w / 2 - 20, cy - 4, 8, 8, 2); ctx.fill();
+  }
+}
+
+// --- Frame loop ---------------------------------------------------------------
+// Runs only while something is moving. Integration uses small fixed steps so
+// springs behave the same at 60 or 240 Hz and a dropped frame never jumps.
+
+let running = false, lastFrame = 0, settledReported = null;
+
+function reportSettled(settled) {
+  if (settled === settledReported) return;
+  settledReported = settled;
+  window.bridge.setSettled(settled);
+}
+
+function wake() {
+  reportSettled(false);
+  if (running) return;
+  running = true;
+  lastFrame = performance.now();
+  requestAnimationFrame(frame);
+}
+
+function frame(now) {
+  const dt = clamp((now - lastFrame) / 1000, 0, 1 / 30);
+  lastFrame = now;
+
+  const t = layout(now);
+  S.w.target = t.w; S.h.target = t.h; S.alpha.target = t.alpha; S.body.target = t.body;
+  S.rise.target = reducedMotion.matches ? 0 : t.rise;
+  S.pitch.target = t.pitch; S.work.target = t.work;
+  S.meter.target = t.meter; S.check.target = t.check; S.text.target = t.text;
+  S.controls.target = t.controls; S.hint.target = t.hint;
+  S.meeting.target = t.meeting; S.mstop.target = t.mstop;
+  S.hub.target = t.hub;
+  S.note.target = noteMode ? 1 : 0;
+  timeLayers();
+  hoverTarget = findHoverTarget(t);
+  updateAccessibility(t);
+  canvas.style.cursor = hoverTarget ? 'pointer' : 'default';
+
+  const springs = Object.values(S);
+  for (let done = 0; done < dt; done += 1 / 480) {
+    const step = Math.min(1 / 480, dt - done);
+    for (const s of springs) s.step(step);
+  }
+  updateVoice(dt);
+  draw(now, t);
+  reportHitRect(t);
+
+  const moving = mode !== 'rest' || pressedOn || springs.some((s) => !s.resting)
+              || voice.shown.some((v) => v > 0.001);
+  if (moving) {
+    requestAnimationFrame(frame);
+  } else {
+    running = false;
+    reportSettled(S.alpha.x < 0.004);
+    // Redraw on the next displayed second, leaving the GPU idle in between.
+    clearTimeout(meetingTick);
+    if (meetingVisible()) meetingTick = setTimeout(wake, 1010 - ((Date.now() - meetingSince) % 1000));
+  }
+}
+
+resize();
+watchPixelRatio();
+</script>
+</body>
+</html>

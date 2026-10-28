@@ -1,0 +1,76 @@
+# The real dictation pipeline must save before paste/fallback decisions.
+# No model, microphone, clipboard or real app-data writes are used here.
+import collections
+import tempfile
+import threading
+import unittest
+import contextlib
+import io
+from unittest.mock import Mock, patch
+import numpy as np
+from whisper_key.state_manager import StateManager
+from whisper_key.transcript_log import load_transcripts
+
+
+class CapturePipelineTests(unittest.TestCase):
+    def setUp(self):
+        quiet = contextlib.redirect_stdout(io.StringIO())
+        quiet.__enter__(); self.addCleanup(quiet.__exit__, None, None, None)
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        context = patch('whisper_key.transcript_log.get_user_app_data_path', return_value=folder.name)
+        context.start(); self.addCleanup(context.stop)
+        for name in ('record_transcription', 'audit_record'):
+            context = patch(f'whisper_key.state_manager.{name}')
+            context.start(); self.addCleanup(context.stop)
+        s = self.state = object.__new__(StateManager)
+        s._state_lock = threading.Lock()
+        s.is_model_loading = False
+        s._command_mode = s._note_mode = s._rephrase_mode = False
+        s._rephrase_selection = ''
+        s._streaming_delivery_active = False
+        s.streaming_delivery = None
+        s._pending_model_change = s._pending_device_change = None
+        s.logger = Mock()
+        s.audio_feedback = s.audio_recorder = s.system_tray = s.level_overlay = Mock()
+        s.audio_recorder.get_audio_duration.return_value = 1.2
+        s.whisper_engine = Mock()
+        s.whisper_engine.transcribe_audio.return_value = 'hello there'
+        s.clipboard_manager = Mock()
+        s.clipboard_manager.auto_paste = True
+        s.config_manager = Mock()
+        s.config_manager.config = {'history': {'retention_days': None, 'keep_audio': False}, 'audit': {}}
+        s.config_manager.get_whisper_config.return_value = {'quick_short_clips': True}
+        s.config_manager.get_postprocess_config.return_value = {}
+        s.app_rules = Mock()
+        s.app_rules.match_for_foreground.return_value = {}
+        s.recent_transcriptions = collections.deque(maxlen=10)
+        s._offer_outsider_language = s._update_ui_state = s._refresh_pending = s._maybe_restart_continuous = Mock()
+        s._smart_edit = Mock()
+        s._foreground_is_textable = lambda: False
+
+    def test_missing_input_saves_pending_without_copy_or_popup(self):
+        self.state.fallback_window = Mock()
+        self.state._transcription_pipeline(np.zeros(19200, dtype=np.float32))
+        entries = load_transcripts()
+        self.assertEqual(1, len(entries))
+        self.assertEqual('pending', entries[0]['delivery'])
+        self.state.clipboard_manager.copy_text.assert_not_called()
+        self.state.clipboard_manager.deliver_transcription.assert_not_called()
+        self.state.fallback_window.show.assert_not_called()
+        self.state._smart_edit.assert_not_called()
+        self.assertTrue(self.state.whisper_engine.transcribe_audio.call_args.kwargs['quick'])
+
+    def test_failed_paste_leaves_saved_dictation_pending(self):
+        self.state._foreground_is_textable = lambda: True
+        self.state.clipboard_manager.deliver_transcription.return_value = False
+        self.state._transcription_pipeline(np.zeros(19200, dtype=np.float32))
+        entry = load_transcripts()[0]
+        self.assertEqual('pending', entry['delivery'])
+        self.assertEqual('hello there', entry['original_text'])
+
+    def test_suppressed_target_still_saves_without_clipboard_side_effects(self):
+        self.state.app_rules.match_for_foreground.return_value = {'suppress': True}
+        self.state._transcription_pipeline(np.zeros(19200, dtype=np.float32))
+        self.assertEqual('suppressed', load_transcripts()[0]['delivery'])
+        self.state.clipboard_manager.copy_text.assert_not_called()

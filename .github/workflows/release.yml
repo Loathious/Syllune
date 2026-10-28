@@ -1,0 +1,82 @@
+name: Release
+
+# Builds the Syllune Windows installer. A manual run only uploads the build as
+# a workflow artifact; a `syllune-v*` tag also attaches it to a GitHub release.
+# This fork never publishes to PyPI.
+on:
+  push:
+    tags:
+      - 'syllune-v*'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruamel.yaml numpy pyperclip
+      - run: python -m unittest tests.test_smoke -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - working-directory: overlay
+        run: node --test tests/*.test.js
+
+  # The same script as a local build (packaging/windows/build.ps1), run in a
+  # project-local .venv with the locked runtime and build requirements.
+  installer:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Create the build environment
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -r packaging\windows\requirements-runtime.txt -r packaging\windows\requirements-build.txt
+          .venv\Scripts\python.exe -m pip install --no-deps -e .
+      - name: Build the installer
+        shell: pwsh
+        run: packaging\windows\build.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: syllune-installer
+          path: |
+            dist/syllune/Syllune-Setup-*.exe
+            dist/syllune/Syllune-Setup-*.exe.sha256
+
+  github-release:
+    needs: installer
+    if: startsWith(github.ref, 'refs/tags/syllune-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: syllune-installer
+          path: installer/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: installer/*
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          body: |
+            ## Install
+
+            Download `Syllune-Setup-<version>-x64.exe` below and run it. It installs
+            for your user only. The installer is unsigned, so Windows SmartScreen
+            warns first: choose **More info → Run anyway**.
+
+            The `.sha256` file lets you check the download is complete. It is not a
+            substitute for code signing.

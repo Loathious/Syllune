@@ -1,0 +1,31 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    # Windows is the primary platform; macOS is supported. Run the smoke suite
+    # on all three so platform-specific import/path regressions surface in CI.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Smoke tests deliberately avoid the heavy ML stack (faster-whisper, ctranslate2)
+      # but a handful need numpy and pyperclip via transitive module-level imports.
+      # Keep this list tight — anything heavier should be skipped behind a feature flag.
+      - run: pip install ruamel.yaml numpy pyperclip
+      # macOS only: pull in pyobjc so platform/macos/hotkeys.py is actually
+      # imported and its Quartz symbols resolve here rather than on a user's
+      # Mac. The hotkey event tap (issue #4) has no other automated coverage.
+      - if: runner.os == 'macOS'
+        run: pip install pyobjc-framework-Quartz pyobjc-framework-Cocoa
+      - run: python -m unittest tests.test_smoke -v

@@ -1,0 +1,54 @@
+/* Onboarding uses the hub's native controls and a compact progress rail.
+   All layout stays in this external stylesheet for the hub's strict CSP. */
+.setup-layout { display: grid; grid-template-columns: 155px minmax(0, 1fr); gap: 28px; }
+.setup-steps { list-style: none; padding: 0; margin: 0; color: #8e9bae; font-size: 12px; }
+.setup-steps li { display: flex; align-items: center; gap: 9px; padding: 10px 0; }
+.setup-steps .current { color: #d8e2ee; font-weight: 600; }
+.setup-step-number { border: 1px solid #34445c; width: 23px; height: 23px; border-radius: 50%; display: grid; place-items: center; flex-shrink: 0; }
+.current .setup-step-number { background: #17243b; border-color: #86acd8; color: #b7d5f5; }
+.setup-content { min-width: 0; }
+.setup-heading { margin: 0 0 20px; font-size: 19px; color: #d8e2ee; }
+.setup-heading:focus { outline: none; }
+.setup-body h2 { font-size: 25px; font-weight: 600; letter-spacing: -.6px; line-height: 1.25; }
+.setup-copy { color: #aebed1; line-height: 1.7; margin: 12px 0; font-size: 13px; }
+.setup-wave { color: #86acd8; font-size: 70px; line-height: .8; padding: 10px 0 16px; }
+.setup-note { background: #17243b; border: 1px solid #34445c; border-radius: 10px; padding: 14px; color: #d8e2ee; font-size: 12px; line-height: 1.7; margin: 16px 0; }
+.setup-label, .setup-field > span:first-child { display: block; color: #d8e2ee; font-size: 13px; font-weight: 600; margin-bottom: 9px; }
+.setup-field { display: block; margin: 18px 0; }
+.setup-field .select { max-width: 100%; width: 100%; }
+.setup-field .row-hint { display: block; margin-top: 8px; line-height: 1.6; }
+.setup-mic { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.setup-mic meter { flex: 1; min-width: 100px; height: 16px; }
+.setup-mic .row-hint { width: 100%; }
+.setup-languages, .setup-models { border: 1px solid #34445c; border-radius: 10px; padding: 12px; margin: 18px 0; }
+.setup-languages legend, .setup-models legend { color: #d8e2ee; font-size: 13px; padding: 0 6px; }
+.setup-languages { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; max-height: 225px; overflow: auto; }
+.setup-languages label { display: flex; gap: 7px; align-items: center; font-size: 12px; padding: 5px 0; }
+.setup-languages input, .setup-model input, .setup-option input { accent-color: #86acd8; }
+.setup-model { display: flex; gap: 12px; padding: 14px 5px; cursor: pointer; }
+.setup-model + .setup-model { border-top: 1px solid #28384f; }
+.setup-model input { margin-top: 4px; flex-shrink: 0; }
+.setup-model strong, .setup-option strong { color: #d8e2ee; font-weight: 600; font-size: 13px; }
+.setup-model .row-hint, .setup-option .row-hint { display: block; line-height: 1.6; padding-top: 4px; }
+.setup-model-status progress { width: 100%; accent-color: #86acd8; height: 8px; }
+.setup-transfer { color: #aebed1; font-size: 12px; line-height: 1.7; }
+.setup-example { margin: 18px 0; padding: 15px; border-left: 2px solid #86acd8; background: #17243b; color: #d8e2ee; font-size: 14px; line-height: 1.7; white-space: pre-wrap; }
+.setup-controls { color: #aebed1; font-size: 13px; line-height: 1.7; padding-left: 20px; }
+.setup-controls li { padding: 5px 0; }
+.setup-option { display: flex; align-items: flex-start; gap: 12px; padding: 13px 0; border-bottom: 1px solid #28384f; cursor: pointer; }
+.setup-option input { margin-top: 4px; }
+.setup-navigation { display: flex; gap: 8px; align-items: center; border-top: 1px solid #28384f; padding-top: 20px; margin-top: 24px; flex-wrap: wrap; }
+.setup-navigation .button:last-child { margin-left: auto; }
+.setup-error { color: #f0a5a5; font-size: 12px; line-height: 1.6; }
+.setup-error:empty { display: none; }
+.setup-scratch { width: 100%; min-height: 130px; }
+.setup-content :is(button, input, select, textarea):focus-visible { outline: 2px solid #86acd8; outline-offset: 3px; }
+@media (max-width: 850px) {
+  .setup-layout { grid-template-columns: 1fr; gap: 20px; }
+  .setup-steps { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+  .setup-steps li { padding: 3px 0; }
+  .setup-languages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .setup-layout *, .setup-layout *::before, .setup-layout *::after { animation: none !important; transition: none !important; }
+}

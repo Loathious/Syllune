@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' file:">
+<title>Syllune</title>
+<link rel="stylesheet" href="hub.css">
+<link rel="stylesheet" href="meetings.css">
+<link rel="stylesheet" href="onboarding.css">
+</head>
+<body>
+<!-- index.html
+     The hub window: a sidebar of pages and one content area. Each page lives
+     in pages/*.js and registers itself with core.js, which handles routing,
+     calls to the engine and the shared controls. -->
+
+<aside class="sidebar">
+  <div class="sidebar-top drag">
+    <img class="brand-mark" src="../assets/syllune.svg" alt="" width="32" height="32"><span class="brand">Syllune</span>
+  </div>
+  <nav class="nav" id="nav" aria-label="Pages">
+    <span class="nav-indicator" id="nav-indicator" aria-hidden="true"></span>
+    <button class="nav-item" data-page="home" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.2 8 2.8l5.5 4.4V13a.5.5 0 0 1-.5.5H9.5v-3.5h-3v3.5H3a.5.5 0 0 1-.5-.5z"/></svg>
+      <span>Home</span>
+    </button>
+    <button class="nav-item" data-page="history" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/></svg>
+      <span>History</span>
+    </button>
+    <button class="nav-item" data-page="notes" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5.5L12 5v8.5H4z"/><path d="M6 8h4M6 10.5h4"/></svg>
+      <span>Notes</span>
+    </button>
+    <button class="nav-item" data-page="meetings" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5" r="2"/><path d="M2 13v-2a4 4 0 0 1 8 0v2M11 3.5a2 2 0 0 1 0 4M12 9a3 3 0 0 1 2 3v1"/></svg>
+      <span>Meetings</span>
+    </button>
+    <button class="nav-item" data-page="styles" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12.5h10M4.5 10 8 3l3.5 7M5.6 7.8h4.8"/></svg>
+      <span>Styles</span>
+    </button>
+    <button class="nav-item" data-page="dictionary" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3h7a2 2 0 0 1 2 2v8h-7a2 2 0 0 1-2-2z"/><path d="M3.5 11a2 2 0 0 1 2-2h7"/></svg>
+      <span>Dictionary</span>
+    </button>
+    <button class="nav-item" data-page="settings" type="button">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h6M12 4.5h1M3 11.5h1M7 11.5h6"/><circle cx="10.5" cy="4.5" r="1.5"/><circle cx="5.5" cy="11.5" r="1.5"/></svg>
+      <span>Settings</span>
+    </button>
+  </nav>
+</aside>
+
+<div class="titlebar drag"></div>
+<main class="content" id="content"></main>
+
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <span class="toast-text" id="toast-text"></span>
+  <button class="toast-action" id="toast-action" type="button"></button>
+</div>
+
+<script src="core.js"></script>
+<script src="pages/home.js"></script>
+<script src="pages/history.js"></script>
+<script src="pages/notes.js"></script>
+<script src="pages/meetings.js"></script>
+<script src="pages/styles.js"></script>
+<script src="pages/dictionary.js"></script>
+<script src="pages/settings.js"></script>
+<script src="pages/onboarding.js"></script>
+<script src="start.js"></script>
+</body>
+</html>
