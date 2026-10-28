@@ -14,7 +14,18 @@ _PLAYING = 4
 _PAUSED = 5
 
 
+# Importing onnxruntime after winrt crashes the process (a native segfault),
+# and onnxruntime can be loaded later by faster-whisper's VAD or streaming.
+# The other order is safe, so it is loaded before winrt when it is installed.
+def _load_onnxruntime_first():
+    try:
+        import onnxruntime  # noqa: F401
+    except ImportError:
+        pass
+
+
 async def _sessions():
+    _load_onnxruntime_first()
     from winrt.windows.media.control import (
         GlobalSystemMediaTransportControlsSessionManager as SessionManager)
     manager = await SessionManager.request_async()

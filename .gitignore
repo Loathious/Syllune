@@ -146,3 +146,6 @@ VERIFY.md
 
 # Electron overlay dependencies (npm install in overlay/)
 node_modules/
+
+# The Syllune engine build spec is source, not build output.
+!packaging/windows/*.spec
