@@ -17,7 +17,7 @@ Hold a shortcut, speak, release. Syllune types what you said wherever your curso
 
 ## Install
 
-Download the latest `Syllune-Setup-<version>-x64.exe` from [Releases](https://github.com/Loathious/Syllune/releases/latest) and run it. No admin rights or developer tools are needed. The installer isn't code-signed yet, so Windows SmartScreen will show a warning first.
+The Windows installer is published with each release. It installs per user and needs no admin rights or developer tools.
 
 [Install and update](docs/syllune-install.md) · [Troubleshooting](docs/syllune-troubleshooting.md) · [Privacy](docs/syllune-privacy.md)
 
