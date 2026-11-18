@@ -4442,8 +4442,12 @@ class OctoberReviewTests(unittest.TestCase):
     # everything else in the hub.
     def test_tray_menu_is_short_and_keeps_support_tools_under_help(self):
         from unittest.mock import MagicMock
-        import pystray
-        from syllune.system_tray import SystemTray
+        # CI installs only the light packages; the tray needs the real ones.
+        try:
+            import pystray
+            from syllune.system_tray import SystemTray
+        except ImportError as missing:
+            self.skipTest(f'tray packages are not installed: {missing}')
         state = MagicMock()
         state.microphone_choices.return_value = [{'id': 'default', 'name': 'Windows default'},
                                                  {'id': 'USB mic', 'name': 'USB mic'}]
@@ -4573,7 +4577,11 @@ class OctoberReviewTests(unittest.TestCase):
     def test_history_section_hot_reloads_with_postprocess(self):
         import tempfile
         import logging
-        from syllune.config_manager import ConfigManager
+        # The config manager imports the platform layer, absent on light CI.
+        try:
+            from syllune.config_manager import ConfigManager
+        except ImportError as missing:
+            self.skipTest(f'platform packages are not installed: {missing}')
         # Exercise the reload rather than pinning an implementation's loop text.
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'settings.yaml'
