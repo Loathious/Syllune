@@ -2,26 +2,27 @@
 <html><head><meta charset="utf-8"><title>Syllune dock preview</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
 <style>
-/* One spot the pill can be dropped on: the same horizontal capsule, at the
-   same place and size, as the recording pill on that dock. */
+/* One spot the pill can be dropped on: the same capsule, at the same place
+   and size, as the recording pill on that dock, in the same smoked glass. */
 html, body {margin:0; width:100%; height:100%; overflow:hidden; background:transparent; pointer-events:none}
 .dock {
   box-sizing:border-box; width:100%; height:100%; border-radius:999px;
-  border:1px solid rgba(134,172,216,.42); background:rgba(23,36,59,.34);
-  display:flex; align-items:center; justify-content:center; gap:4px;
+  border:1px solid rgba(255,255,255,.22); background:rgba(34,34,40,.36);
+  display:flex; align-items:center; justify-content:center;
   opacity:0; transform:scale(.94);
   transition:opacity 160ms cubic-bezier(.23,1,.32,1), transform 160ms cubic-bezier(.23,1,.32,1),
     background-color 120ms ease, border-color 120ms ease;
 }
 .dock.shown {opacity:1; transform:none}
-.dock.selected {background:rgba(23,36,59,.62); border-color:rgba(216,226,238,.9)}
-.dock i {display:block; width:3px; height:8px; background:rgba(216,226,238,.5); border-radius:2px; transition:background-color 120ms ease}
-.dock i:nth-child(2n) {height:14px}
-.dock.selected i {background:rgba(216,226,238,.85)}
+.dock.selected {background:rgba(34,34,40,.7); border-color:rgba(255,255,255,.72)}
+/* The voice line, lying along the capsule whichever way it stands. */
+.dock i {display:block; width:55%; height:2px; background:rgba(240,240,244,.4); border-radius:2px; transition:background-color 120ms ease}
+@media (max-aspect-ratio: 1/1) { .dock i {width:2px; height:55%} }
+.dock.selected i {background:rgba(240,240,244,.9)}
 @media (prefers-reduced-motion: reduce) {
   .dock {transform:none; transition:opacity 120ms ease, background-color 120ms ease, border-color 120ms ease}
 }
-</style></head><body aria-hidden="true"><div class="dock" id="dock"><i></i><i></i><i></i><i></i><i></i></div>
+</style></head><body aria-hidden="true"><div class="dock" id="dock"><i></i></div>
 <script>
 // The native window supplies geometry; this document paints only its offer.
 // main.js shares candidate selection with release. A null highlight fades

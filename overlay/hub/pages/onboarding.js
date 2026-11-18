@@ -92,8 +92,8 @@ Hub.pages.onboarding = (() => {
   }
 
   function microphone() {
+    // Ids are "default" or the microphone's name (see microphone_choices in the engine).
     const devices = [...current.mics];
-    if (!devices.some(item => String(item.id) === String(current.mic))) devices.unshift({ id: current.mic, name: 'System default' });
     const select = el('select', { class: 'select', id: 'setup-mic' });
     for (const item of devices) select.append(el('option', { value: String(item.id), text: item.name }));
     select.value = String(current.mic);

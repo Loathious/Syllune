@@ -1,8 +1,8 @@
 // tests/hub-electron-check.js
 // Renders the hub in real Electron with made-up engine replies (no engine,
 // microphone or downloads): walks the setup guide for a new and an existing
-// install, opens Styles to load real app icons, and saves one screenshot
-// per view for a visual review.
+// install, opens Styles to load real app icons, adds a word on the Dictionary
+// page, and saves one screenshot per view for a visual review.
 // Run: node_modules/electron/dist/electron.exe tests/hub-electron-check.js
 const {app, BrowserWindow, ipcMain} = require('electron');
 const fs = require('fs');
@@ -53,6 +53,12 @@ const SETTINGS = {
   idle_pill: true, sounds: true, retention_days: null, autostart_supported: true, autostart: true, update_checks: false,
 };
 
+// One list: words typed and learned, and the spellings that are corrected.
+const DICTIONARY = {
+  words: [{word: 'Syllune', learned: false}, {word: 'Örnsköldsvik', learned: true}, {word: 'PyInstaller', learned: true}],
+  replacements: [{from: 'silune', to: 'Syllune'}], auto_learn: true,
+};
+
 // The stub bridge runs in the page; engine calls cross to this process.
 const STUB = `
   const {ipcRenderer} = require('electron');
@@ -78,6 +84,12 @@ async function run() {
     if (method === 'setup_mic_test') return {ok: true, result: status.mic_test};
     if (method === 'styles') return {ok: true, result: STYLES};
     if (method === 'settings') return {ok: true, result: SETTINGS};
+    if (method === 'dictionary') return {ok: true, result: DICTIONARY};
+    if (method === 'dictionary_add') {
+      DICTIONARY.words.push({word: params.word, learned: false});
+      if (params.heard) DICTIONARY.replacements.push({from: params.heard, to: params.word});
+      return {ok: true, result: DICTIONARY};
+    }
     if (method === 'overview') return {ok: false, error: 'not in this check'};
     return {ok: false, error: `unexpected call ${method}`};
   });
@@ -142,6 +154,19 @@ async function run() {
   await shot('settings');
   await js(`document.querySelector('.settings-footer').scrollIntoView()`); await wait(200);
   await shot('settings-end');
+
+  // Dictionary: one panel, one add row; a word with its misspelling lands in both lists.
+  await js(`Hub.navigate('dictionary')`);
+  await wait(600);
+  await js(`(() => { const [word, heard] = document.querySelectorAll('.word-add .input');
+    word.value = 'Loathious'; heard.value = 'loathes us'; document.querySelector('.word-add .button').click(); })()`);
+  await wait(400);
+  const dictionary = await js(`({panels: document.querySelectorAll('.content .panel').length,
+    words: [...document.querySelectorAll('.chips .chip')].map(c => c.firstChild.textContent + (c.classList.contains('learned') ? '*' : '')),
+    fixes: [...document.querySelectorAll('.replacement .heard')].map(n => n.textContent)})`);
+  console.log('dictionary', JSON.stringify(dictionary));
+  if (dictionary.panels !== 1 || dictionary.words.join() !== 'Syllune,Örnsköldsvik*,PyInstaller*,Loathious' || dictionary.fixes.join() !== 'silune,loathes us') failures.push(`dictionary ${JSON.stringify(dictionary)}`);
+  await shot('dictionary');
 
   console.log(failures.length ? 'FAIL\n' + failures.join('\n') : `PASS hub check, screenshots in ${OUT}`);
   app.exit(failures.length ? 1 : 0);

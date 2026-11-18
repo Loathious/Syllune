@@ -12,7 +12,7 @@
   const POSITIONS = ['bottom-center', 'middle-left', 'middle-right'];
   // WINDOW_* is the transparent window; ACTIVE_* is the recording capsule.
   const EDGE_GAP = 24, WINDOW_WIDTH = 420, WINDOW_HEIGHT = 160;
-  const ACTIVE_LENGTH = 88, ACTIVE_THICKNESS = 32;
+  const ACTIVE_LENGTH = 56, ACTIVE_THICKNESS = 26;
   const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
   const isSide = position => position !== 'bottom-center';
 

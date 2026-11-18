@@ -24,14 +24,22 @@ const { pathToFileURL } = require('url');
 app.setName(brand.name);
 app.setAppUserModelId(brand.appId);
 
-// The pill animates continuously; never let Chromium throttle it.
+// The pill animates continuously; never let Chromium throttle it. Windows'
+// occlusion tracking is switched off too: it can decide that a transparent,
+// never-focused window is covered and stop painting it, which is a recording
+// with no pill on screen.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 
 const argValue = (name) => {
   const i = process.argv.indexOf(name);
   return i >= 0 ? process.argv[i + 1] : null;
 };
+// A start at login carries --background: just the pill and the tray icon, no
+// window over whatever you are doing. Opening the app yourself turns it on.
+let showOnConnect = !process.argv.includes('--background');
 let notesDir = argValue('--notes-dir') || path.join(app.getPath('home'), 'Voice Notes');
 
 // Your data (settings, history, recordings) is the engine's folder; the
@@ -55,7 +63,9 @@ let position = 'bottom-center';
 let idlePill = true;
 let gameMode = false;
 let meetingSince = null;
-let pendingCount = 0;
+let recordingState = null;       // the engine's last 'recording' message while one runs
+let recordingLocked = false;
+let offer = null;                // {kind, label, seconds, until} while the pill asks something
 let moveTimer = null;
 let pillSettled = true;          // the renderer reports when nothing is on screen or moving
 let quitting = false;
@@ -76,6 +86,8 @@ if (!app.requestSingleInstanceLock()) { app.quit(); return; }
 app.on('second-instance', () => {
   if (alive(startupWindow)) { startupWindow.restore(); startupWindow.show(); startupWindow.focus(); }
   else if (engine && !engine.destroyed) openHub('home');
+  // Still starting in the background: now someone is waiting, so show it.
+  else if (startingEngine) showStartup();
 });
 app.on('activate', () => {
   if (alive(startupWindow)) startupWindow.show();
@@ -100,6 +112,8 @@ process.on('uncaughtException', (error) => {
 // landing in between must not touch them.
 function quit(code = 0) {
   quitting = true;
+  clearTimeout(restartTimer);
+  clearInterval(topTimer);
   engineRuntime?.stop();
   clearTimeout(dockSwitch?.timer);
   clearDockPreviews();
@@ -114,6 +128,7 @@ function quit(code = 0) {
 // The engine reconnects using --port; it does not need a system Python/Node.
 function showStartup(error = '') {
   startupError = error;
+  showOnConnect = true;            // someone is watching the start: open the app when it is up
   if (!alive(startupWindow)) {
     startupWindow = new BrowserWindow({width: 560, height: 390, resizable: false,
       title: brand.name, backgroundColor: '#101929', icon: path.join(__dirname, 'assets', 'syllune.ico'),
@@ -133,10 +148,37 @@ function showStartup(error = '') {
   }
 }
 
-function engineFailed(error) {
+// --- Engine recovery --------------------------------------------------------
+// An engine that dies after it was running (a crash, a driver fault, running
+// out of memory) is started again in the background: the pill and the hub
+// stay where they are and the pill says what is happening. Only a start that
+// fails, or an engine that keeps dying, brings up the startup window with its
+// Retry button.
+const RESTART_LIMIT = 3;
+const RESTART_WINDOW_MS = 10 * 60 * 1000;
+const RESTART_DELAY_MS = 1500;   // lets the old process let go of the microphone and its lock
+let recentRestarts = [];         // when the last automatic restarts happened
+let restartTimer = null;
+let engineWasUp = false;         // the engine we launched finished connecting
+
+function engineFailed(error, restartable = true) {
   if (quitting) return;
+  const wasUp = engineWasUp;
   startingEngine = false;
+  engineWasUp = false;
   engine = null;
+  engineRuntime?.stop();
+  failPendingCalls();
+  forgetEngineState();
+  const now = Date.now();
+  recentRestarts = recentRestarts.filter((time) => now - time < RESTART_WINDOW_MS);
+  if (restartable && wasUp && recentRestarts.length < RESTART_LIMIT) {
+    recentRestarts.push(now);
+    sendToPill('state', {state: 'error', message: 'Restarting Syllune', calm: true});
+    clearTimeout(restartTimer);
+    restartTimer = setTimeout(() => launchBundledEngine(true), RESTART_DELAY_MS);
+    return;
+  }
   // Destroying the pill must not trigger its usual crash-recovery respawn.
   quitting = true;
   if (alive(pill)) pill.destroy();
@@ -145,10 +187,27 @@ function engineFailed(error) {
   showStartup(error.message);
 }
 
-async function launchBundledEngine() {
+// Everything the engine told us about itself is gone with it; the next one
+// reports afresh. Leaving a recording or a meeting clock on the pill would be
+// a promise nothing is keeping.
+function forgetEngineState() {
+  recordingState = null;
+  recordingLocked = false;
+  offer = null;
+  meetingSince = null;
+  gameMode = false;
+  keepPillOnTop(false);
+  sendToPill('offer', {kind: null});
+  sendPillConfig();
+  showPillWindow();
+}
+
+// `restart` is the quiet recovery above: no startup window, no hub.
+async function launchBundledEngine(restart = false) {
   if (startingEngine) return;
   startingEngine = true;
-  showStartup();
+  if (restart) showOnConnect = false;
+  else if (showOnConnect) showStartup();
   engine = null;
   engineRuntime?.stop();
   const executable = path.join(process.resourcesPath, 'engine', 'SylluneEngine.exe');
@@ -159,9 +218,12 @@ async function launchBundledEngine() {
       shellPid: process.pid, overlayDir: __dirname,
       onConnect(socket, buffered) {
         startingEngine = false;
+        engineWasUp = true;
         attachEngineSocket(socket, buffered);
-        createPill();
-        openHub('home');
+        if (!alive(pill)) createPill();
+        // A hub that outlived the old engine shows what that engine knew.
+        if (alive(hub)) hub.reload();
+        if (showOnConnect) openHub('home');
         if (alive(startupWindow)) startupWindow.close();
       }, onFailure: engineFailed});
   } catch (error) { engineFailed(error); }
@@ -173,19 +235,23 @@ ipcMain.on('startup:logs', event => { if (fromStartup(event)) shell.openPath(dat
 ipcMain.on('startup:quit', event => { if (fromStartup(event)) quit(); });
 
 app.whenReady().then(() => {
-  if (app.isPackaged && !argValue('--port')) { launchBundledEngine(); return; }
-  createPill();
-  listenToEngine();
+  // A monitor that is unplugged, rotated or rescaled moves the edge the pill
+  // rests on; without this it would stay where that edge used to be.
   const displaysChanged = () => { cancelPillDrag(); placePill(); };
   screen.on('display-metrics-changed', displaysChanged);
   screen.on('display-removed', displaysChanged);
   screen.on('display-added', displaysChanged);
+  if (app.isPackaged && !argValue('--port')) { launchBundledEngine(); return; }
+  createPill();
+  listenToEngine();
 });
 
 // The engine owns our lifetime: no windows open must not quit the app.
 app.on('window-all-closed', (e) => e.preventDefault());
 app.on('before-quit', () => {
   quitting = true;
+  clearTimeout(restartTimer);
+  clearInterval(topTimer);
   engineRuntime?.stop();
   clearDockPreviews();
   stopHoverPoll();
@@ -215,8 +281,9 @@ function createPill() {
   pill.setIgnoreMouseEvents(true);
   pill.setVisibleOnAllWorkspaces(true);
   pill.loadFile(path.join(__dirname, 'pill.html'));
-  // The engine's settings can arrive before the page has loaded; resend them.
-  pill.webContents.on('did-finish-load', sendPillConfig);
+  // The engine's settings can arrive before the page has loaded, and a page
+  // that reloads mid-recording has forgotten the recording; resend both.
+  pill.webContents.on('did-finish-load', restorePill);
   // Shown once and kept up: idle frames are transparent, so showing a
   // recording never pays a window-show delay or risks a focus change. Only
   // game mode hides the window for real.
@@ -234,6 +301,7 @@ function createPill() {
     pill = null;
     hitRects = null;
     hovering = false;
+    nearby = false;
     stopHoverPoll();
     clearInterval(moveTimer);
     if (!quitting) setTimeout(createPill, 500);
@@ -245,7 +313,41 @@ function createPill() {
 }
 
 function showPillWindow() {
-  if (alive(pill) && !pill.isVisible()) pill.showInactive();
+  if (alive(pill) && !gameMode && !pill.isVisible()) pill.showInactive();
+}
+
+// What a freshly loaded pill page needs to look like the one it replaced.
+function restorePill() {
+  sendPillConfig();
+  if (recordingState) {
+    sendToPill('state', recordingState);
+    if (recordingLocked) sendToPill('state', {state: 'locked', value: true});
+  }
+  const left = offer ? (offer.until - Date.now()) / 1000 : 0;
+  if (left > 1) sendToPill('offer', {kind: offer.kind, label: offer.label, seconds: left});
+}
+
+// --- Keeping the pill in sight ------------------------------------------------
+// A recording with no pill on screen looks like a dictation that never
+// started. While one runs the window is put back on top every couple of
+// seconds: a full-screen app, another always-on-top window or Explorer
+// restarting can otherwise leave it underneath. Raising never takes focus.
+const TOP_RECHECK_MS = 2000;
+let topTimer = null;
+
+function raisePill() {
+  if (!alive(pill)) return;
+  pill.setAlwaysOnTop(true, 'screen-saver');
+  if (!pill.isVisible()) pill.showInactive();
+  pill.moveTop();
+}
+
+function keepPillOnTop(on) {
+  clearInterval(topTimer);
+  topTimer = null;
+  if (!on) return;
+  raisePill();
+  topTimer = setInterval(raisePill, TOP_RECHECK_MS);
 }
 
 function sendToPill(channel, payload) {
@@ -334,18 +436,24 @@ ipcMain.on('pill:dock-left', (event) => {
 });
 
 function sendPillConfig(extra = {}) {
-  sendToPill('config', { idlePill, gameMode, meetingSince, pendingCount, dock: position, ...extra });
+  sendToPill('config', { idlePill, gameMode, meetingSince, dock: position, ...extra });
 }
 
-// --- Pill hover ------------------------------------------------------------
+// --- Pill hover and proximity -----------------------------------------------
 // The window ignores the mouse except while the cursor is over the pill. That
-// is decided by polling the cursor (20 Hz, only while the pill is clickable)
-// rather than Electron's forwarded mouse moves, which install a system-wide
-// low-level mouse hook that every mouse event would pass through.
+// is decided by polling the cursor rather than Electron's forwarded mouse
+// moves, which install a system-wide low-level mouse hook that every mouse
+// event would pass through. The poll is slow while the cursor is elsewhere and
+// fast once it comes close, and it also tells the pill when the cursor is
+// near, which is what brings the tucked-away pill out.
 
-const HOVER_POLL_MS = 50;
+const HOVER_POLL_NEAR_MS = 25;   // cursor close by: hover has to feel instant
+const HOVER_POLL_FAR_MS = 110;   // cursor elsewhere: only notice it approaching
+const NEAR_PX = 110;             // closer than this, the tucked pill comes out
+const ALERT_PX = 340;            // closer than this, poll fast
 let hitRects = null;             // clickable rectangles in window coordinates, from the renderer
 let hovering = false;
+let nearby = false;
 let hoverTimer = null;
 
 function setPillHover(inside) {
@@ -360,32 +468,47 @@ function setPillHover(inside) {
   pill.webContents.send('hover', inside);
 }
 
+function setPillNear(near) {
+  if (near === nearby || !alive(pill)) return;
+  nearby = near;
+  pill.webContents.send('near', near);
+}
+
 function stopHoverPoll() {
-  clearInterval(hoverTimer);
+  clearTimeout(hoverTimer);
   hoverTimer = null;
 }
 
-function pollHover() {
-  // Captured drags keep receiving pointer-up even after leaving the old shape.
-  if (dragSession) { setPillHover(true); return; }
-  if (!alive(pill) || !hitRects || gameMode || !pill.isVisible()) {
-    setPillHover(false);
-    return;
-  }
+// Pixels between the cursor and the pill's clickable area: 0 on it, Infinity
+// when there is nothing to reach. Captured drags keep receiving pointer-up
+// even after leaving the old shape, so a drag always counts as on it.
+function cursorDistance() {
+  if (dragSession) return 0;
+  if (!alive(pill) || !hitRects || gameMode || !pill.isVisible()) return Infinity;
   const cursor = screen.getCursorScreenPoint();
   const bounds = pill.getBounds();
   const x = cursor.x - bounds.x, y = cursor.y - bounds.y;
-  setPillHover(hitRects.some((r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h));
+  return Math.min(...hitRects.map((r) =>
+    Math.hypot(Math.max(r.x - x, 0, x - r.x - r.w), Math.max(r.y - y, 0, y - r.y - r.h))));
+}
+
+function pollHover() {
+  hoverTimer = null;
+  const distance = cursorDistance();
+  setPillHover(distance === 0);
+  setPillNear(distance <= NEAR_PX);
+  if (hitRects || dragSession) hoverTimer = setTimeout(pollHover, distance <= ALERT_PX ? HOVER_POLL_NEAR_MS : HOVER_POLL_FAR_MS);
 }
 
 const isRect = (r) => r && ['x', 'y', 'w', 'h'].every((key) => Number.isFinite(r[key]));
 ipcMain.on('pill:hit-rect', (_e, rects) => {
   if (!alive(pill) || _e.sender !== pill.webContents) return;
   hitRects = Array.isArray(rects) && rects.length && rects.length <= 4 && rects.every(isRect) ? rects : null;
-  if (hitRects && !hoverTimer) hoverTimer = setInterval(pollHover, HOVER_POLL_MS);
-  if (!hitRects && hoverTimer) {
+  if (hitRects && !hoverTimer) pollHover();
+  if (!hitRects) {
     stopHoverPoll();
     setPillHover(false);
+    setPillNear(false);
   }
 });
 
@@ -395,10 +518,12 @@ ipcMain.on('pill:settled', (_e, settled) => {
   hidePillWindowIfIdle();
 });
 
-// Clicks on the pill: dictate, stop, cancel, meetings and the hub.
+// Clicks on the pill: dictate, stop, cancel, meetings, the hub, and "yes" to
+// whatever the pill is offering.
 ipcMain.on('pill:action', (_e, action) => {
   if (!alive(pill) || _e.sender !== pill.webContents) return;
-  if (!['dictate', 'stop', 'cancel', 'meeting_start', 'meeting_stop', 'meeting_open', 'open_hub', 'pending_open'].includes(action)) return;
+  if (!['dictate', 'stop', 'cancel', 'meeting_start', 'meeting_stop', 'meeting_open', 'open_hub', 'offer_accept'].includes(action)) return;
+  if (action === 'offer_accept') offer = null;
   engine?.write(JSON.stringify({ type: 'action', action }) + '\n');
 });
 
@@ -475,19 +600,22 @@ ipcMain.on('pill:motion', (event, reduce) => {
   if (alive(pill) && event.sender === pill.webContents) reducedMotion = !!reduce;
 });
 
-// Screen deltas avoid feedback as the native window follows the pointer.
-ipcMain.on('pill:drag', (event, delta) => {
+// The renderer only says where on the pill it was grabbed (in window
+// coordinates); the window is then put under the cursor's real position, so
+// the pill stays in the hand at any speed and rounding never adds up to drift.
+ipcMain.on('pill:drag', (event, grab) => {
   if (!alive(pill) || event.sender !== pill.webContents || gameMode || dockSwitch) return;
-  if (!delta || !Number.isFinite(delta.x) || !Number.isFinite(delta.y) || Math.abs(delta.x) > 1000 || Math.abs(delta.y) > 1000) return;
+  if (!grab || !Number.isFinite(grab.x) || !Number.isFinite(grab.y)) return;
   clearInterval(moveTimer);
-  const bounds = pill.getBounds();
-  if (!dragSession) dragSession = {bounds, position};
+  if (!dragSession) dragSession = {bounds: pill.getBounds(), position};
+  const {width, height} = dragSession.bounds;
+  if (grab.x < 0 || grab.y < 0 || grab.x > width || grab.y > height) return;
   const point = screen.getCursorScreenPoint();
   const display = screen.getDisplayNearestPoint(point);
   dragSession.display = display;
   dragSession.selected = docks.candidate(point, display.workArea);
   setPillHover(true);
-  pill.setBounds({...bounds, x: bounds.x + Math.round(delta.x), y: bounds.y + Math.round(delta.y)});
+  pill.setBounds({x: Math.round(point.x - grab.x), y: Math.round(point.y - grab.y), width, height});
   showDockPreviews(display, dragSession.selected);
 });
 // Release commits the last highlighted offer, so pointer movement during an
@@ -538,27 +666,41 @@ function attachEngineSocket(socket, buffered = '') {
     if (app.isPackaged && !quitting) engineFailed(new Error('The speech engine disconnected. Open logs for details, then retry.'));
     else if (!quitting) quit();
   });
-  socket.on('error', error => { if (app.isPackaged) engineFailed(error); else quit(1); });
+  socket.on('error', error => {
+    if (engine !== socket) return;
+    if (app.isPackaged) engineFailed(error); else quit(1);
+  });
   if (buffered) socket.unshift(Buffer.from(buffered));
 }
 
 function handle(msg) {
   switch (msg.type) {
-    case 'pending':
-      pendingCount = Math.max(0, Math.min(9999, Number(msg.count) || 0));
-      sendPillConfig();
+    case 'offer':
+      // The pill asks one small question ("Paste dictation?"); null withdraws it.
+      offer = typeof msg.kind === 'string' && typeof msg.label === 'string' && Number(msg.seconds) > 0
+        ? {kind: msg.kind, label: msg.label.slice(0, 48), until: Date.now() + Math.min(600, Number(msg.seconds)) * 1000}
+        : null;
+      sendToPill('offer', offer ? {kind: offer.kind, label: offer.label, seconds: (offer.until - Date.now()) / 1000} : {kind: null});
       break;
     case 'meeting':
       meetingSince = Number.isFinite(msg.since) && msg.since > 0 ? msg.since : null;
       sendPillConfig();
-      if (meetingSince && !gameMode) showPillWindow();
+      if (meetingSince) showPillWindow();
       break;
     case 'state':
       if (msg.state === 'recording') {
+        recordingState = msg;
+        recordingLocked = false;
         placePill(true);
-        showPillWindow();
-      } else if (gameMode && msg.state !== 'hidden' && msg.state !== 'locked') {
-        showPillWindow();         // a result to show for a dictation made in game mode
+        keepPillOnTop(true);
+      } else if (msg.state === 'locked') {
+        recordingLocked = !!msg.value;
+      } else if (msg.state !== 'notice') {
+        // Anything else ends the recording: working, done, failed or cancelled.
+        recordingState = null;
+        keepPillOnTop(false);
+        // A result to show for a dictation made in game mode.
+        if (gameMode && msg.state !== 'hidden') raisePill();
       }
       sendToPill('state', msg);
       break;
@@ -582,7 +724,7 @@ function handle(msg) {
       else showPillWindow();
       break;
     case 'note_saved':
-      if (gameMode) showPillWindow();
+      if (gameMode) raisePill();
       sendToPill('state', { state: 'note_saved' });
       if (alive(hub)) hub.webContents.send('hub:event', 'notes');
       break;
@@ -596,7 +738,8 @@ function handle(msg) {
       settleCall(msg);
       break;
     case 'startup_error':
-      engineFailed(new Error(String(msg.message || 'Syllune could not finish starting. Retry or open logs.')));
+      // The engine itself says it cannot start; starting it again would only repeat that.
+      engineFailed(new Error(String(msg.message || 'Syllune could not finish starting. Retry or open logs.')), false);
       break;
     case 'quit':
       quit();
@@ -694,6 +837,13 @@ ipcMain.handle('hub:audio-source', async (event, kind, id, track) => {
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.extname(full).toLowerCase() !== '.wav' || !fs.statSync(full).isFile()) throw new Error('Invalid recording');
   return pathToFileURL(full).href;
 });
+
+// Calls still waiting when the engine goes away would otherwise hang until
+// their timeout; the hub gets a plain answer at once.
+function failPendingCalls() {
+  for (const settle of [...pendingCalls.values()]) settle({ ok: false, error: 'Syllune is restarting' });
+  pendingCalls.clear();
+}
 
 function settleCall(msg) {
   const settle = pendingCalls.get(msg.id);

@@ -79,8 +79,9 @@ Hub.pages.settings = (() => {
   // --- Dictation -----------------------------------------------------------
 
   function micRow(s) {
+    // Ids are "default" or the microphone's name; the engine lists the chosen
+    // one even while it is unplugged, so the selection never looks wrong.
     const options = s.mics.map((mic) => ({ value: mic.id, label: mic.name }));
-    if (!options.some((option) => option.value === s.mic)) options.unshift({ value: s.mic, label: 'Windows default' });
     return row('Microphone', null, Hub.select({ options, value: s.mic, label: 'Microphone', onChange: (v) => set('mic', v) }));
   }
 

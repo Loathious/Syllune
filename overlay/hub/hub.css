@@ -465,8 +465,9 @@ input, textarea, .selectable { user-select: text; }
   transition: opacity 150ms ease, transform 150ms var(--ease-out);
 }
 .chip.plain { padding-right: 10px; }
-.chip .count { color: var(--faint); margin-left: 4px; }
-.chip-remove, .chip-add {
+/* A word Syllune added by itself: the same chip, a little quieter. */
+.chip.learned { background: transparent; color: var(--muted); }
+.chip-remove {
   display: grid;
   place-items: center;
   width: 20px;
@@ -478,13 +479,10 @@ input, textarea, .selectable { user-select: text; }
   color: var(--faint);
   transition: background-color 150ms ease, color 150ms ease;
 }
-.chip-remove svg, .chip-add svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
-.chip.suggestion { border-style: dashed; background: transparent; color: var(--muted); }
+.chip-remove svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 
 @media (hover: hover) and (pointer: fine) {
   .chip-remove:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
-  .chip-add:hover { background: var(--accent-soft); color: var(--accent); }
-  .chip.suggestion:hover { color: var(--text); border-color: var(--line-strong); }
 }
 
 .chip.leaving { opacity: 0; transform: scale(0.95); }
@@ -877,14 +875,16 @@ kbd {
 .replacement .heard { color: var(--muted); overflow-wrap: anywhere; }
 .replacement .arrow { color: var(--faint); text-align: center; }
 .replacement .fixed { overflow-wrap: anywhere; }
-.replacement-add {
+.fixes { margin-top: 18px; }
+/* One add row for the whole dictionary: the word, and optionally what it gets written as. */
+.word-add {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 14px;
 }
-.replacement-add .arrow { color: var(--faint); text-align: center; }
+.dictionary-auto { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
 
 /* --- Narrow window ------------------------------------------------------ */
 /* The sidebar folds to icons so pages keep room for their controls. The

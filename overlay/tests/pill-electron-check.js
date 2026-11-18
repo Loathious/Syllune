@@ -10,7 +10,9 @@ const docks = require('../dock-geometry');
 
 const OUT = path.join(__dirname, '..', '..', '.temp', 'syllune-pill-states.png');
 const AREA = {x: 0, y: 0, width: 1920, height: 1040};
-const STATES = ['idle', 'hover', 'pending', 'meeting', 'listen', 'locked', 'processing', 'success', 'saved', 'error', 'notice'];
+const STATES = ['tucked', 'near', 'hover', 'offer', 'meeting', 'listen', 'quiet', 'locked', 'processing', 'success', 'copied', 'saved',
+  'error', 'restarting', 'notice'];
+const LOCKED_W = 104, CONTROL_INSET = 16;   // pill.html: the hands-free capsule and its buttons
 const SETTLE_MS = 650;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -22,6 +24,7 @@ const STUB = `
   window.bridge = {
     onState: fn => pillEvents.state = fn, onConfig: fn => pillEvents.config = fn, onLevel: fn => pillEvents.level = fn,
     onHover: fn => pillEvents.hover = fn, onDragCancelled: fn => pillEvents.cancelled = fn, onDockLeave: fn => pillEvents.dockLeave = fn,
+    onNear: fn => pillEvents.near = fn, onOffer: fn => pillEvents.offer = fn,
     setHitRect: rects => window.hitRects = rects, setSettled: () => {}, setReducedMotion: () => {},
     pillAction: a => pillCalls.push(['action', a]), pillDrag: d => pillCalls.push(['drag', d]),
     pillDragEnd: c => pillCalls.push(['end', c]), pillDragCancel: () => pillCalls.push(['cancel']),
@@ -54,13 +57,20 @@ async function run() {
       await js(`(() => {
         const state = ${JSON.stringify(state)};
         drawnText.length = 0;
-        pillEvents.config({dock: ${JSON.stringify(dock)}, idlePill: true, meetingSince: state === 'meeting' ? Date.now() - 15000 : null, pendingCount: state === 'pending' ? 2 : 0});
-        pillEvents.state({state: 'hidden'}); pillEvents.hover(['hover', 'pending', 'meeting'].includes(state));
+        pillEvents.config({dock: ${JSON.stringify(dock)}, idlePill: true, meetingSince: state === 'meeting' ? Date.now() - 15000 : null});
+        pillEvents.offer(state === 'offer' ? {kind: 'paste', label: 'Paste dictation?', seconds: 12} : {kind: null});
+        pillEvents.state({state: 'hidden'}); pillEvents.hover(['hover', 'meeting'].includes(state)); pillEvents.near(state === 'near');
+        // Left alone long enough, the handle tucks away; the check doesn't wait for it.
+        if (state === 'tucked') { lastActiveAt = -1e9; wake(); }
         if (['listen', 'locked', 'notice'].includes(state)) { pillEvents.state({state: 'recording'}); pillEvents.level({v: .035, bands: [-20, -23, -27, -25, -35, -39]}); }
+        // A microphone that has produced nothing since the recording began.
+        if (state === 'quiet') { pillEvents.state({state: 'recording'}); lastHeardAt = -1e9; }
         if (state === 'locked') pillEvents.state({state: 'locked', value: true});
         if (['processing', 'success'].includes(state)) pillEvents.state({state});
+        if (state === 'copied') pillEvents.state({state: 'success', message: 'Copied'});
         if (state === 'saved') pillEvents.state({state: 'note_saved'});
         if (state === 'error') pillEvents.state({state: 'error', message: 'Retry dictation'});
+        if (state === 'restarting') pillEvents.state({state: 'error', message: 'Restarting Syllune', calm: true});
         if (state === 'notice') pillEvents.state({state: 'notice', message: 'Microphone changed'});
       })()`);
       await wait(SETTLE_MS);
@@ -70,6 +80,9 @@ async function run() {
       for (const r of result.rects || []) {
         if (r.x < 0 || r.y < 0 || r.x + r.w > docks.WINDOW_WIDTH || r.y + r.h > docks.WINDOW_HEIGHT) failures.push(`${dock}/${state}: hit area leaves the window ${JSON.stringify(r)}`);
       }
+      // The tucked sliver is never a click target itself: only its catch area is.
+      if (state === 'tucked' && (result.rects || []).length !== 1) failures.push(`${dock}/tucked: hit areas ${JSON.stringify(result.rects)}`);
+      if (state === 'quiet' && !/Not hearing/.test(result.status)) failures.push(`${dock}/quiet: status ${result.status}`);
       if (state === 'listen') {
         const pill = result.rects && result.rects[0];
         const drawn = pill && {x: pill.x + 6, y: pill.y + 6, w: pill.w - 12, h: pill.h - 12};
@@ -81,13 +94,29 @@ async function run() {
 
   // Locked recording on the left dock: the stop button clicks, it never drags.
   const left = docks.dockBounds('middle-left', AREA), leftWindow = docks.pillBounds('middle-left', AREA);
-  await js(`pillEvents.config({dock: 'middle-left', meetingSince: null, pendingCount: 0}); pillEvents.state({state: 'hidden'});
+  await js(`pillEvents.config({dock: 'middle-left', meetingSince: null}); pillEvents.state({state: 'hidden'});
     pillEvents.state({state: 'recording'}); pillEvents.state({state: 'locked', value: true}); pillEvents.hover(true); pillCalls.length = 0;`);
   await wait(SETTLE_MS);
-  const stopX = left.x - leftWindow.x + 128 - 18, rowY = left.y - leftWindow.y + left.height / 2;
+  const stopX = left.x - leftWindow.x + LOCKED_W - CONTROL_INSET, rowY = left.y - leftWindow.y + left.height / 2;
   await click(stopX, rowY);
   let calls = await js('pillCalls.slice()');
   if (!calls.some(c => c[0] === 'action' && c[1] === 'stop') || calls.some(c => c[0] === 'drag')) failures.push(`stop click: ${JSON.stringify(calls)}`);
+
+  // Having spoken, a long pause is thinking: the recording capsule stays as it is.
+  await js(`pillEvents.state({state: 'hidden'}); pillEvents.state({state: 'recording'}); pillEvents.level({v: .035, bands: [-20, -23, -27, -25, -35, -39]});`);
+  await wait(120);
+  await js(`pillEvents.level({v: 0, bands: [-80, -80, -80, -80, -80, -80]}); lastHeardAt = -1e9; wake();`);
+  await wait(SETTLE_MS);
+  const paused = await js(`document.getElementById('status').textContent`);
+  if (/Not hearing/.test(paused)) failures.push(`pause after speech showed: ${paused}`);
+
+  // A question on the pill: one click answers it, and it folds away.
+  await js(`pillEvents.state({state: 'hidden'}); pillEvents.offer({kind: 'prompt', label: 'Use as prompt', seconds: 25}); pillEvents.hover(true); pillCalls.length = 0;`);
+  await wait(SETTLE_MS);
+  const question = (await js('hitRects'))[0];
+  await click(question.x + question.w / 2, question.y + question.h / 2);
+  calls = await js('pillCalls.slice()');
+  if (!calls.some(c => c[0] === 'action' && c[1] === 'offer_accept')) failures.push(`offer click: ${JSON.stringify(calls)}`);
 
   // Resting handle: a click anywhere in its catch area starts a dictation.
   await js(`pillEvents.state({state: 'hidden'}); pillEvents.hover(true); pillCalls.length = 0;`);
@@ -113,7 +142,9 @@ async function run() {
   await wait(60);
   calls = await js('pillCalls.slice()');
   const end = calls.find(c => c[0] === 'end');
-  if (!calls.some(c => c[0] === 'drag') || !end || !Number.isFinite(end[1]?.x) || calls.some(c => c[0] === 'action')) failures.push(`drag: ${JSON.stringify(calls)}`);
+  const drag = calls.find(c => c[0] === 'drag');
+  // The drag reports the point the pill was grabbed at, which main.js keeps under the cursor.
+  if (!drag || drag[1]?.x !== 28 || drag[1]?.y !== rowY || !end || !Number.isFinite(end[1]?.x) || calls.some(c => c[0] === 'action')) failures.push(`drag: ${JSON.stringify(calls)}`);
 
   // Changing docks: the pill reports itself gone, then arrives on the new edge.
   await js(`pillCalls.length = 0; pillEvents.hover(false); pillEvents.dockLeave();`);
@@ -126,13 +157,21 @@ async function run() {
   const right = docks.dockBounds('middle-right', AREA), rightWindow = docks.pillBounds('middle-right', AREA);
   if (!arrived || Math.abs(arrived[0].x + 6 - (right.x - rightWindow.x)) > 1) failures.push(`arrival rect ${JSON.stringify(arrived)}`);
 
+  // SYLLUNE_PILL_SHOTS=<folder> also keeps every capture as its own
+  // transparent PNG, for pictures in the README.
+  if (process.env.SYLLUNE_PILL_SHOTS) {
+    fs.mkdirSync(process.env.SYLLUNE_PILL_SHOTS, {recursive: true});
+    for (const c of captures) fs.writeFileSync(path.join(process.env.SYLLUNE_PILL_SHOTS, `${c.dock}-${c.state}.png`), Buffer.from(c.image.split(',')[1], 'base64'));
+  }
+
   // Contact sheet from the actual transparent captures, on a light and a dark desktop.
   const sheet = new BrowserWindow({width: 1600, height: 900, show: false, webPreferences: {offscreen: true}});
   const cells = captures.map(c => `<figure><figcaption>${c.dock} / ${c.state}</figcaption><img src="${c.image}"></figure>`).join('');
   await sheet.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(`<html><body style="margin:0;font:12px Segoe UI;color:#17243b">
-    <style>main{display:grid;grid-template-columns:repeat(6,1fr);gap:6px;padding:10px}figure{margin:0}img{width:100%;display:block;border-radius:4px}
-    .light img{background:#e8edf3}.dark{background:#11161f;color:#c9d3df}.dark img{background:#2a3240}</style>
-    <main class="light">${cells}</main><main class="dark">${cells}</main></body></html>`));
+    <style>main{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;padding:10px}figure{margin:0}img{width:100%;display:block;border-radius:4px}
+    .light img{background:#e8edf3}.dark{background:#11161f;color:#c9d3df}.dark img{background:#2a3240}
+    .busy img{background:repeating-linear-gradient(115deg,#f4f1ea 0 14px,#3b6ea5 14px 22px,#f4f1ea 22px 40px,#1d1d1f 40px 43px)}</style>
+    <main class="light">${cells}</main><main class="dark">${cells}</main><main class="busy">${cells}</main></body></html>`));
   const height = await sheet.webContents.executeJavaScript('document.body.scrollHeight');
   sheet.setContentSize(1600, height);
   await wait(300);

@@ -30,9 +30,9 @@ test('a release over each visible preview selects that preview, including negati
 });
 
 test('side window and bottom window align their visual capsule with the preview', () => {
-  assert.deepEqual(geometry.dockBounds('bottom-center', area), {x:-1004,y:884,width:88,height:32});
-  assert.deepEqual(geometry.dockBounds('middle-left', area), {x:-1896,y:376,width:32,height:88});
-  assert.deepEqual(geometry.dockBounds('middle-right', area), {x:-56,y:376,width:32,height:88});
+  assert.deepEqual(geometry.dockBounds('bottom-center', area), {x:-988,y:890,width:56,height:26});
+  assert.deepEqual(geometry.dockBounds('middle-left', area), {x:-1896,y:392,width:26,height:56});
+  assert.deepEqual(geometry.dockBounds('middle-right', area), {x:-50,y:392,width:26,height:56});
   assert.deepEqual(geometry.pillBounds('middle-right', area), {x:-420,y:340,width:420,height:160});
 });
 
