@@ -106,19 +106,18 @@ class SystemTray:
     # transcripts stay current. Only what people reach for from the taskbar is
     # here; settings live in the hub and support tools sit under Help.
     def _create_menu(self):
-        current_host = self.state_manager.get_current_audio_host()
-        current_device = self.state_manager.get_current_audio_device_id()
+        chosen_microphone = self.state_manager.configured_microphone()
 
-        def switch_device(device_id, device_name):
-            return lambda icon, item: self._select_audio_device(device_id, device_name)
+        def switch_microphone(choice):
+            return lambda icon, item: self._select_microphone(choice)
 
-        def is_current_device(device_id):
-            return lambda item: current_device == device_id
+        def is_chosen_microphone(choice):
+            return lambda item: chosen_microphone == choice
 
         microphones = [
-            pystray.MenuItem(device['name'], switch_device(device['id'], device['name']),
-                             radio=True, checked=is_current_device(device['id']))
-            for device in self.state_manager.get_available_audio_devices(current_host) or []
+            pystray.MenuItem(choice['name'], switch_microphone(choice['id']),
+                             radio=True, checked=is_chosen_microphone(choice['id']))
+            for choice in self.state_manager.microphone_choices() or []
         ]
         recent = self._build_recent_transcriptions_menu()
 
@@ -177,14 +176,12 @@ class SystemTray:
         except Exception as e:
             self.logger.error(f"Failed to open log file: {e}")
 
-    def _select_audio_device(self, device_id: int, device_name: str):
-        success = self.state_manager.request_audio_device_change(device_id, device_name)
-
-        if success:
-            self.config_manager.update_user_setting('audio', 'input_device', device_id)
+    # `choice` is "default" or a microphone name; the state manager saves it.
+    def _select_microphone(self, choice: str):
+        if self.state_manager.select_microphone(choice):
             self._set_menu()
         else:
-            self.logger.warning(f"Request to change audio device to {device_id} was not accepted")
+            self.logger.warning(f"Microphone '{choice}' is not available")
 
     def _show_console(self, icon=None, item=None):
         console.show()

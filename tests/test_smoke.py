@@ -2567,10 +2567,10 @@ class UserReportedSeptemberTests(unittest.TestCase):
 
     def test_recovery_paths_check_the_policy(self):
         source = (ROOT / 'src' / 'syllune' / 'state_manager.py').read_text(encoding='utf-8')
-        # Suppressed/missing targets now save a pending dictation without any
-        # automatic copy. Retry remains the one legacy silent-copy recovery.
-        # End-to-end behavior is covered by test_flow_capture_pipeline.py.
-        self.assertEqual(source.count('silent_copy_allowed'), 1)
+        # Two automatic copies exist, and both ask the policy first: a
+        # dictation with no text field to go to, and Retry. Suppressed apps
+        # never copy. End-to-end behavior is in test_flow_capture_pipeline.py.
+        self.assertEqual(source.count('silent_copy_allowed'), 2)
         retry = source[source.index('def _retry_worker'):]
         self.assertIn('silent_copy_allowed', retry[:retry.index(LF + '    def ', 10)])
 
@@ -3409,12 +3409,15 @@ class EditingFeatureTests(unittest.TestCase):
         sm.system_tray = mock.Mock()
         sm.get_current_state = lambda: state
         sm._wait_for_modifiers_released = lambda: None
+        sm.pending_delivery = mock.Mock()
         return sm
 
     def test_paste_last_retypes_without_auto_send(self):
         sm = self._state_manager(last='hello world')
         self.assertTrue(sm.paste_last_transcription())
         sm.clipboard_manager.deliver_transcription.assert_called_once_with('hello world', use_auto_enter=False)
+        # The copy of it that was waiting to be offered is settled, not offered again.
+        sm.pending_delivery.settle.assert_called_once_with('hello world')
 
     def test_paste_last_with_nothing_to_paste_says_so(self):
         sm = self._state_manager(last=None)
@@ -3952,11 +3955,14 @@ class LayeredDefaultsTests(unittest.TestCase):
         self.assertEqual(merged, [])
 
 
-class DefaultInputFollowTests(unittest.TestCase):
-    """The mic follows the OS default after a dock switch or wake-up at another desk."""
+class MicrophoneWatcherTests(unittest.TestCase):
+    """The recorder stays on the microphone the user chose, follows the OS
+    default only when asked to, and is rebuilt when its stream goes dead."""
 
-    # A StateManager with heavy deps faked; `default_id` is what Core Audio reports.
-    def _state_manager(self, input_device='default', state='idle', capturing=True):
+    # A StateManager with heavy deps faked. `chosen` is the saved setting,
+    # `default_id` / `count` are what Windows reports on this poll.
+    def _state_manager(self, chosen='default', state='idle', capturing=True,
+                       default_id='webcam', count=2):
         import unittest.mock as mock
         try:
             import numpy  # noqa: F401  (must predate the sys.modules snapshot)
@@ -3972,70 +3978,117 @@ class DefaultInputFollowTests(unittest.TestCase):
         sm = StateManager.__new__(StateManager)
         sm.logger = __import__('logging').getLogger('test')
         sm.config_manager = mock.Mock()
-        sm.config_manager.get_setting = lambda section, key: input_device
+        sm.config_manager.get_setting = lambda section, key: chosen
         sm.audio_recorder = mock.Mock()
         sm.audio_recorder.is_capturing = lambda: capturing
         sm.get_current_state = lambda: state
-        sm._rebind_to_default_input = mock.Mock()
+        sm._rebind_microphone = mock.Mock()
+        sm._dead_capture_polls = 0
+        self.module = state_manager_module
         self.endpoints = state_manager_module.audio_endpoints
+        self.endpoints.is_supported = lambda: True
+        self.endpoints.get_default_input_id = lambda: default_id
+        self.endpoints.get_input_count = lambda: count
         return sm
 
-    def test_rebinds_when_the_default_mic_changes(self):
-        sm = self._state_manager()
-        self.endpoints.get_default_input_id = lambda: 'headset'
-        self.assertEqual(sm._follow_default_input('webcam'), 'headset')
-        sm._rebind_to_default_input.assert_called_once()
+    def test_follows_the_default_mic_when_set_to_default(self):
+        sm = self._state_manager(default_id='headset')
+        self.assertEqual(sm._keep_microphone_bound(('webcam', 2)), ('headset', 2))
+        sm._rebind_microphone.assert_called_once()
 
     def test_leaves_an_unchanged_working_mic_alone(self):
         sm = self._state_manager()
-        self.endpoints.get_default_input_id = lambda: 'webcam'
-        self.assertEqual(sm._follow_default_input('webcam'), 'webcam')
-        sm._rebind_to_default_input.assert_not_called()
+        self.assertEqual(sm._keep_microphone_bound(('webcam', 2)), ('webcam', 2))
+        sm._rebind_microphone.assert_not_called()
 
-    def test_rebinds_when_the_capture_stream_died(self):
-        sm = self._state_manager(capturing=False)
-        self.endpoints.get_default_input_id = lambda: 'webcam'
-        sm._follow_default_input('webcam')
-        sm._rebind_to_default_input.assert_called_once()
+    # The bug this release fixes: a chosen microphone used to be dropped for
+    # the Windows default whenever the default changed or a stream hiccuped.
+    def test_a_chosen_mic_ignores_default_changes(self):
+        sm = self._state_manager(chosen='Studio mic', default_id='headset')
+        sm._keep_microphone_bound(('webcam', 2))
+        sm._rebind_microphone.assert_not_called()
+
+    def test_a_device_being_plugged_in_rescans_so_a_chosen_mic_comes_back(self):
+        sm = self._state_manager(chosen='Studio mic', count=3)
+        self.assertEqual(sm._keep_microphone_bound(('webcam', 2)), ('webcam', 3))
+        sm._rebind_microphone.assert_called_once()
+
+    def test_a_dead_stream_is_rebuilt_after_two_polls_then_backs_off(self):
+        sm = self._state_manager(chosen='Studio mic', capturing=False)
+        sm._keep_microphone_bound(('webcam', 2))
+        sm._rebind_microphone.assert_not_called()   # the recorder gets a moment to reopen by itself
+        sm._keep_microphone_bound(('webcam', 2))
+        sm._rebind_microphone.assert_called_once()
+        for _ in range(sm.DEAD_CAPTURE_RETRY_POLLS):
+            sm._keep_microphone_bound(('webcam', 2))
+        sm._rebind_microphone.assert_called_once()  # no rebuild storm while it stays dead
 
     def test_waits_while_recording_and_retries_later(self):
-        sm = self._state_manager(state='recording')
-        self.endpoints.get_default_input_id = lambda: 'headset'
-        self.assertEqual(sm._follow_default_input('webcam'), 'webcam', 'change stays pending')
-        sm._rebind_to_default_input.assert_not_called()
+        for busy in ('recording', 'processing'):
+            sm = self._state_manager(state=busy, default_id='headset')
+            self.assertEqual(sm._keep_microphone_bound(('webcam', 2)), ('webcam', 2), 'change stays pending')
+            sm._rebind_microphone.assert_not_called()
 
-    def test_explicitly_chosen_mic_is_not_followed(self):
-        sm = self._state_manager(input_device=3)
-        self.endpoints.get_default_input_id = lambda: 'headset'
-        sm._follow_default_input('webcam')
-        sm._rebind_to_default_input.assert_not_called()
-
-    # --- follow-through on #20 after review ---
     def test_no_mic_at_all_waits_instead_of_rebinding(self):
         # Unplugged, or none yet: rebinding would fail and log every two seconds.
-        sm = self._state_manager(capturing=False)
-        self.endpoints.get_default_input_id = lambda: None
-        self.assertEqual(sm._follow_default_input('webcam'), 'webcam')
-        sm._rebind_to_default_input.assert_not_called()
+        sm = self._state_manager(capturing=False, default_id=None, count=0)
+        for _ in range(4):
+            self.assertEqual(sm._keep_microphone_bound(('webcam', 2)), ('webcam', 2))
+        sm._rebind_microphone.assert_not_called()
 
     def test_a_mic_arriving_later_is_followed(self):
-        # The app started undocked with no mic (known None); the dock's arrives.
-        sm = self._state_manager()
-        self.endpoints.get_default_input_id = lambda: 'dock-mic'
-        self.assertEqual(sm._follow_default_input(None), 'dock-mic')
-        sm._rebind_to_default_input.assert_called_once()
+        # The app started undocked with no mic; the dock's arrives.
+        sm = self._state_manager(default_id='dock-mic', count=1)
+        self.assertEqual(sm._keep_microphone_bound((None, 0)), ('dock-mic', 1))
+        sm._rebind_microphone.assert_called_once()
 
-    def test_watcher_starts_wherever_the_platform_supports_it(self):
-        # Not only when a mic happens to be plugged in at launch.
+    # --- the setting is a name, never an index ---
+    def test_a_saved_index_from_older_versions_means_default(self):
+        self.assertEqual(self._state_manager(chosen=3).configured_microphone(), 'default')
+        self.assertEqual(self._state_manager(chosen='  Studio mic ').configured_microphone(), 'Studio mic')
+
+    def test_the_chosen_mic_resolves_by_name_or_falls_back_to_the_host_default(self):
+        sm = self._state_manager(chosen='Studio mic')
+        sm._current_audio_host = 'Windows WASAPI'
+        sm._get_default_device_for_host = lambda host: 7
+        self.module.find_input_device = lambda name, host: 4 if name == 'Studio mic' else None
+        self.assertEqual(sm.resolve_microphone(), 4)
+        self.module.find_input_device = lambda name, host: None   # unplugged
+        self.assertEqual(sm.resolve_microphone(), 7)
+
+    def test_choices_keep_an_unplugged_chosen_mic_visible(self):
+        sm = self._state_manager(chosen='Studio mic')
+        sm.get_available_audio_devices = lambda: [{'id': 1, 'name': 'Webcam'}, {'id': 5, 'name': 'Webcam'}]
+        self.assertEqual([choice['id'] for choice in sm.microphone_choices()],
+                         ['default', 'Webcam', 'Studio mic'])
+        self.assertIn('not connected', sm.microphone_choices()[-1]['name'])
+
+    def test_selecting_a_mic_saves_its_name_and_binds(self):
         import unittest.mock as mock
         sm = self._state_manager()
-        with mock.patch('threading.Thread') as thread:
-            self.endpoints.is_supported = lambda: False
-            sm._start_default_input_watcher()
-            thread.assert_not_called()
-            self.endpoints.is_supported = lambda: True
-            sm._start_default_input_watcher()
-            thread.assert_called_once()
+        sm.get_available_audio_devices = lambda: [{'id': 1, 'name': 'Webcam'}]
+        sm._bind_microphone = mock.Mock()
+        sm.system_tray = mock.Mock()
+        self.assertTrue(sm.select_microphone('Webcam'))
+        sm.config_manager.update_user_setting.assert_called_once_with('audio', 'input_device', 'Webcam')
+        sm._bind_microphone.assert_called_once()
+        self.assertFalse(sm.select_microphone('Nonexistent'))
+
+    # --- the recorder itself never changes device or gives up ---
+    def test_the_recorder_reopens_the_same_device_and_never_gives_up(self):
+        recorder = self._source_of('audio_recorder.py')
+        loop = recorder[recorder.index('def _capture_loop'):recorder.index('def _audio_callback')]
+        self.assertNotIn('self.device = None', loop)
+        self.assertNotIn('max_retries', loop)
+        self.assertIn('while self._capture_running:', loop)
+
+    def test_device_change_closes_the_old_stream_before_opening_the_new_one(self):
+        state = self._source_of('state_manager.py')
+        body = state[state.index('def _execute_audio_device_change'):]
+        self.assertLess(body.index('old_recorder.shutdown()'), body.index('AudioRecorder('))
+
+    def _source_of(self, name):
+        return (Path(__file__).resolve().parent.parent / 'src' / 'syllune' / name).read_text(encoding='utf-8')
 
 
 class LoginItemRepairTests(unittest.TestCase):
@@ -4204,7 +4257,7 @@ class OctoberReviewTests(unittest.TestCase):
     def test_recorder_swaps_and_recording_starts_share_a_lock(self):
         state = self._source('state_manager.py')
         self.assertIn('self._recorder_lock = threading.RLock()', state)
-        for method in ('def _begin_recording', 'def _rebind_to_default_input',
+        for method in ('def _begin_recording', 'def _rebind_microphone',
                        'def _execute_audio_device_change', 'def stop_recording'):
             body = state[state.index(method):]
             body = body[:body.index('\n    def ', 10)]
@@ -4392,7 +4445,8 @@ class OctoberReviewTests(unittest.TestCase):
         import pystray
         from syllune.system_tray import SystemTray
         state = MagicMock()
-        state.get_available_audio_devices.return_value = [{'id': 1, 'name': 'USB mic'}]
+        state.microphone_choices.return_value = [{'id': 'default', 'name': 'Windows default'},
+                                                 {'id': 'USB mic', 'name': 'USB mic'}]
         state.get_recent_transcriptions.return_value = []
         state.meetings.active = False
         tray = SystemTray(state, {'enabled': True}, config_manager=MagicMock())

@@ -33,8 +33,10 @@ class SetupTests(unittest.TestCase):
                                            allowed_languages=[], language=None,
                                            is_loading=lambda: False),
             get_current_state=lambda: 'idle',
-            get_available_audio_devices=lambda: [{'id': 2, 'name': 'Test microphone'}],
-            get_current_audio_device_id=lambda: 2,
+            microphone_choices=lambda: [{'id': 'default', 'name': 'Windows default'},
+                                        {'id': 'Test microphone', 'name': 'Test microphone'}],
+            configured_microphone=lambda: 'default',
+            audio_recorder=SimpleNamespace(device=None),
             request_model_change=Mock(return_value=True),
         )
         self.cached = set()

@@ -2,8 +2,9 @@
 # Manages `whisper.hotwords` — the list of names and jargon Whisper is biased
 # toward, which is the cheapest way to fix recurring misrecognitions. Provides
 # CLI add/remove/list, a small Tk add-word dialog, and history mining that
-# suggests hotwords from words the user actually dictates. Writes
-# user_settings.yaml directly (round-trip YAML) so it works without a running app.
+# finds the names and terms the user actually dictates, which the hub learns
+# automatically. Writes user_settings.yaml directly (round-trip YAML) so it
+# works without a running app.
 
 import logging
 import threading
@@ -101,6 +102,10 @@ _SUGGEST_STOPWORDS = {
     'jag', 'du', 'vi', 'de', 'det', 'den', 'ett', 'en', 'och', 'att', 'men',
     'eller', 'som', 'för', 'med', 'på', 'till', 'är', 'har', 'kan', 'ska',
     'ja', 'nej', 'hej', 'tack', 'okej', 'så', 'här', 'där', 'vad', 'hur',
+    # Capitalized by convention, never misheard: not worth a place in the list.
+    'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
+    'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+    'september', 'october', 'november', 'december',
 }
 
 # A "namey" token: CamelCase, ALLCAPS acronym, alphanumeric tech term (h264,
@@ -131,7 +136,9 @@ def suggest_hotwords(texts: List[str], known: Optional[set] = None,
                 )
                 if not is_namey or len(tok) < 2:
                     continue
-                if tok.lower() in _SUGGEST_STOPWORDS or tok.lower() in known_lower:
+                # "I'm", "I'll", "Let's": a contraction is as ordinary as its first part.
+                base = _re.split(r"[’']", tok)[0].lower()
+                if tok.lower() in _SUGGEST_STOPWORDS or base in _SUGGEST_STOPWORDS or tok.lower() in known_lower:
                     continue
                 key = tok.casefold()
                 counts[key] = counts.get(key, 0) + 1
@@ -150,6 +157,28 @@ def suggest_hotwords_from_history(min_count: int = 3, limit: int = 20) -> List[t
     texts = [e.get('text', '') for e in load_transcripts()]
     return suggest_hotwords(texts, known=set(list_hotwords()),
                             min_count=min_count, limit=limit)
+
+
+# =============================================================================
+# Learning (names and terms you keep saying join the dictionary by themselves)
+# =============================================================================
+
+LEARN_MIN_COUNT = 3     # said at least this often in recent history
+LEARNED_LIMIT = 30      # hotwords ride along in Whisper's prompt: a long list crowds it out
+LEARN_HISTORY = 600     # how many recent dictations are looked at
+
+
+# Pure core of learning: which words to add now. `learned` is what was added
+# automatically before (only those count toward the limit; words you typed
+# never do) and `ignored` is what must not come back: words you removed.
+def words_to_learn(texts: List[str], words: List[str], learned: List[str], ignored: List[str],
+                   min_count: int = LEARN_MIN_COUNT, limit: int = LEARNED_LIMIT) -> List[str]:
+    current = {word.lower() for word in words}
+    room = limit - sum(1 for word in learned if word.lower() in current)
+    if room <= 0:
+        return []
+    known = set(words) | set(ignored)
+    return [word for word, _ in suggest_hotwords(texts, known=known, min_count=min_count, limit=room)]
 
 
 def show_dictionary() -> int:

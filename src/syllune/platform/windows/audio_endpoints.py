@@ -1,10 +1,12 @@
 # platform/windows/audio_endpoints.py
-# Reads the ID of Windows' current default microphone straight from Core Audio.
-# PortAudio enumerates devices only once at init, so this is how we notice a
-# dock/headset switch or a wake-up at a desk with different hardware.
+# Reads the ID of Windows' current default microphone straight from Core Audio,
+# and how many capture devices exist. PortAudio enumerates devices only once at
+# init, so this is how we notice a dock/headset switch, a microphone being
+# plugged in or removed, or a wake-up at a desk with different hardware.
 # macOS mirror: platform/macos/audio_endpoints.py.
 import ctypes
 import logging
+import threading
 import uuid
 from typing import Optional
 
@@ -44,6 +46,37 @@ def _method(com_object, index, *argtypes):
 
 def _release(com_object):
     _method(com_object, _RELEASE)(com_object)
+
+
+# ---- COM for threads that open a microphone ---------------------------------
+# PortAudio's WASAPI backend reaches Core Audio through COM, and COM has to be
+# set up on the thread that opens a stream. The thread that loaded PortAudio
+# has it. Any other thread (the recorder's capture thread, a meeting, the
+# microphone test) does not, and its open fails with "Unanticipated host
+# error" -9999 unless COM happens to be open elsewhere in the process at that
+# instant. That is how a recording used to land on the wrong microphone: the
+# first open failed and the recorder fell back to another device. One parked
+# thread keeps COM's multithreaded apartment open for the whole run, and every
+# thread without its own COM setup then shares it.
+_com_lock = threading.Lock()
+_com_kept = False
+
+
+def keep_com_available():
+    global _com_kept
+    with _com_lock:
+        if _com_kept:
+            return
+        _com_kept = True
+    ready = threading.Event()
+
+    def hold_apartment():
+        _ole32.CoInitializeEx(None, COINIT_MULTITHREADED)
+        ready.set()
+        threading.Event().wait()    # parked until the process ends
+
+    threading.Thread(target=hold_apartment, daemon=True, name="audio-com").start()
+    ready.wait(2.0)
 
 
 # Whether this platform can report the default microphone at all. The watcher
@@ -90,3 +123,13 @@ def get_default_input_id() -> Optional[str]:
         # initialised as STA) must not be.
         if com_init >= 0:
             _ole32.CoUninitialize()
+
+
+# How many capture devices Windows has right now, or None when it can't say. A
+# change means something was plugged in or removed, so PortAudio's list is stale.
+def get_input_count() -> Optional[int]:
+    try:
+        return int(ctypes.windll.winmm.waveInGetNumDevs())
+    except Exception as e:
+        logger.debug(f"Could not count input devices: {e}")
+        return None

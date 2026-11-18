@@ -13,9 +13,11 @@
 #     Whisper's 16 kHz only at stop time. This avoids resampling per chunk during
 #     a recording, which would burn CPU.
 #
-#   • Mid-recording USB disconnects trigger a 3-retry recovery loop that falls
-#     back to the system default input. Silent-mic (peak amplitude near zero)
-#     surfaces a console warning on stop.
+#   • A stream that fails to open or stops delivering audio is reopened on the
+#     SAME device, forever, with a growing pause. The recorder never swaps the
+#     microphone by itself: the state manager knows which mic the user chose
+#     and decides when a fallback is needed (see _keep_microphone_bound there).
+#     Silent-mic (peak amplitude near zero) surfaces a console warning on stop.
 
 import collections
 import logging
@@ -27,7 +29,32 @@ import numpy as np
 import sounddevice as sd
 import soxr
 
+from .platform import audio_endpoints
 from .voice_activity_detection import VadEvent, VAD_CHUNK_SIZE
+
+
+# The PortAudio index of the input device called `name`, or None when it is not
+# connected. Settings store the name because indexes are reassigned whenever a
+# device is plugged in or removed, which used to select the wrong microphone.
+# Each device appears once per host API, so `host_name` picks which copy.
+def find_input_device(name: str, host_name: Optional[str] = None) -> Optional[int]:
+    wanted = str(name or '').strip().lower()
+    if not wanted:
+        return None
+    try:
+        devices = sd.query_devices()
+        hosts = sd.query_hostapis()
+    except Exception:
+        return None
+    fallback = None
+    for index, device in enumerate(devices):
+        if device.get('max_input_channels', 0) <= 0 or device['name'].strip().lower() != wanted:
+            continue
+        if not host_name or hosts[device['hostapi']]['name'].lower() == host_name.lower():
+            return index
+        if fallback is None:
+            fallback = index
+    return fallback if not host_name else None
 
 
 class AudioRecorder:
@@ -40,6 +67,10 @@ class AudioRecorder:
     SILENCE_RMS_THRESHOLD = 0.005
     LONG_PAUSE_SECONDS = 2.0
     LONG_PAUSE_REPLACEMENT_SECONDS = 0.4
+    # A stream that has delivered nothing for this long is treated as dead.
+    STALLED_STREAM_SECONDS = 3.0
+    # Longest pause between attempts to reopen a failed stream.
+    MAX_REOPEN_WAIT_SECONDS = 5.0
 
     def __init__(self,
                  on_vad_event: Callable[[VadEvent], None],
@@ -97,11 +128,17 @@ class AudioRecorder:
         self._capture_running = False
         self._capture_thread = None
         self._stream_error = None
+        # Whether the stream is open, and when it last delivered audio; together
+        # they tell the owner if this recorder can actually hear anything.
+        self._stream_open = False
+        self._last_audio_at = 0.0
         self._current_level = 0.0
         self.last_recording_was_silent = False
         # Loudest sample since the current recording began, so the state
         # manager can warn within a second that the mic is delivering nothing.
         self._recording_peak = 0.0
+        # The stream is opened on the capture thread, not this one.
+        audio_endpoints.keep_com_available()
         self._start_capture()
 
     def _setup_continuous_vad_monitoring(self):
@@ -122,7 +159,15 @@ class AudioRecorder:
         if self.on_streaming_result:
             self.on_streaming_result(text, is_final)
 
+    # `device` is "default", a PortAudio index, or a device name as saved in
+    # settings. A named microphone that is not connected falls back to the
+    # default input for now; the state manager returns to it once it is back.
     def resolve_device(self, device):
+        if isinstance(device, str) and device != "default":
+            index = find_input_device(device)
+            if index is None:
+                self.logger.warning(f"Microphone '{device}' is not connected; using default input for now")
+            device = index
         if device == "default" or device is None:
             self.device = None
             self._resolve_hostapi(None)
@@ -192,10 +237,15 @@ class AudioRecorder:
         self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True, name="audio-capture")
         self._capture_thread.start()
 
+    # Owns the input stream for the life of the recorder. Every failure (the
+    # stream won't open, the device vanished, audio stopped arriving) leads to
+    # the same answer: drop a recording that can no longer be trusted, wait a
+    # little and reopen the same device. Giving up here used to leave the app
+    # running but deaf, and swapping to the default device here used to move
+    # the user off the microphone they picked after one transient error.
     def _capture_loop(self):
-        retry_count = 0
-        max_retries = 3
-        while self._capture_running and retry_count <= max_retries:
+        failures = 0
+        while self._capture_running:
             try:
                 with sd.InputStream(samplerate=self._recording_rate,
                                     channels=self.channels,
@@ -203,46 +253,52 @@ class AudioRecorder:
                                     dtype=self.STREAM_DTYPE,
                                     blocksize=self._vad_blocksize if self.continuous_vad else None,
                                     device=self.device,
-                                    latency='low'):
-                    retry_count = 0
+                                    latency='low') as stream:
+                    if failures:
+                        self.logger.info(f"Audio stream reopened after {failures} failed attempt(s)")
+                    self._stream_open = True
+                    self._last_audio_at = time.monotonic()
                     while self._capture_running:
                         if self.is_recording:
                             self._check_max_duration_exceeded()
                         sd.sleep(self.LOOP_SLEEP_MS)
+                        if not stream.active:
+                            raise RuntimeError("the input stream stopped")
+                        if time.monotonic() - self._last_audio_at > self.STALLED_STREAM_SECONDS:
+                            raise RuntimeError("the input stream stopped delivering audio")
+                        # Only a stream that has really run clears the failure
+                        # count, so one that dies right after opening still backs off.
+                        if failures and time.monotonic() - self._last_audio_at < 1.0:
+                            failures = 0
+                            self._stream_error = None
                     return
             except Exception as e:
                 if not self._capture_running:
                     return
-                retry_count += 1
+                failures += 1
                 self._stream_error = e
-                msg = str(e).lower()
-                is_disconnect = any(s in msg for s in (
-                    'unanticipated', 'invalid device', 'device unavailable',
-                    'no default input', 'errno -9999', 'errno -9988',
-                ))
-                if is_disconnect and retry_count <= max_retries:
-                    self.logger.warning(f"Audio stream lost ({e}); recovering to default device (attempt {retry_count}/{max_retries})")
-                    print("⚠ Audio device disconnected — falling back to default input")
-                    if self.is_recording:
-                        with self._buffer_lock:
-                            self.is_recording = False
-                            self._buffer.clear()
-                    self.device = None
-                    try:
-                        self._resolve_hostapi(None)
-                        self._recording_rate = self._get_recording_sample_rate()
-                        self._needs_resampling_cached = self._needs_resampling()
-                    except Exception as resolve_err:
-                        self.logger.error(f"Could not resolve default device: {resolve_err}")
-                    time.sleep(0.5)
-                    continue
-                self.logger.error(f"Audio capture stream error: {e}")
-                print(f"Audio capture failed: {e}")
-                return
+                # The first failure and every tenth after it are logged, so a mic
+                # that stays unplugged for an hour doesn't fill the log.
+                if failures == 1 or failures % 10 == 0:
+                    self.logger.warning(f"Audio stream lost ({e}); reopening the same device (attempt {failures})")
+                if self.is_recording:
+                    with self._buffer_lock:
+                        self.is_recording = False
+                        self._buffer.clear()
+            finally:
+                self._stream_open = False
+            self._wait_before_reopen(failures)
+
+    # Sleeps in short slices so shutdown never waits out a long retry pause.
+    def _wait_before_reopen(self, failures: int):
+        deadline = time.monotonic() + min(0.5 * failures, self.MAX_REOPEN_WAIT_SECONDS)
+        while self._capture_running and time.monotonic() < deadline:
+            time.sleep(0.1)
 
     def _audio_callback(self, audio_data, frames, _time, status):
         chunk = audio_data.copy()
         recording = self.is_recording
+        self._last_audio_at = time.monotonic()
 
         if recording:
             self._current_level = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
@@ -511,10 +567,11 @@ class AudioRecorder:
     def get_recording_status(self) -> bool:
         return self.is_recording
 
-    # False once the capture thread gave up (e.g. stream still dead after the
-    # disconnect retries), so the owner can rebind to a working device.
+    # True while the stream is open and audio is arriving. False means the
+    # recorder is retrying a dead device, so the owner can rebind to a working one.
     def is_capturing(self) -> bool:
-        return self._capture_thread is not None and self._capture_thread.is_alive()
+        return (self._stream_open
+                and time.monotonic() - self._last_audio_at <= self.STALLED_STREAM_SECONDS)
 
     def get_audio_duration(self, audio_data: np.ndarray) -> float:
         if audio_data is None or len(audio_data) == 0:

@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import autostart, stats
 from .app_setup import AppSetup
 from .corrections import corrections_from_edit
-from .dictionary import list_hotwords, suggest_hotwords
+from .dictionary import LEARN_HISTORY, list_hotwords, words_to_learn
 from .styles import available_styles
 from .transcript_log import (delete_transcript, load_transcripts, update_transcript,
                              find_transcript, queue_pending, record_transcript)
@@ -56,6 +56,8 @@ MAX_ABOUT_ME = 1500
 MAX_INSTRUCTIONS = 500
 MAX_TERM = 80
 MAX_RULE_APPS = 60
+MAX_IGNORED_WORDS = 300   # removed words remembered so they are not learned again
+LEARN_EVERY = 5           # dictations between looks at history for new words
 
 
 def app_label(exe: str) -> str:
@@ -97,6 +99,9 @@ class HubApi:
         # read-modify-write of user_settings.yaml.
         self._write_lock = threading.Lock()
         self._setup = AppSetup(config_manager, state_manager, write_lock=self._write_lock)
+        # Starts one short of the interval, so the first dictation of a session
+        # already catches up on everything said before it.
+        self._dictations_since_learning = LEARN_EVERY - 1
         self._methods = {
             # name: (function, writes)
             'overview': (self.overview, False),
@@ -109,7 +114,7 @@ class HubApi:
             'dictionary': (self.dictionary, False),
             'dictionary_add': (self.dictionary_add, True),
             'dictionary_remove': (self.dictionary_remove, True),
-            'replacement_add': (self.replacement_add, True),
+            'dictionary_auto': (self.dictionary_auto, True),
             'replacement_remove': (self.replacement_remove, True),
             'styles': (self.styles, False),
             'style_set': (self.style_set, True),
@@ -296,32 +301,91 @@ class HubApi:
 
     # --- Dictionary ----------------------------------------------------------
 
+    # One list for the page: the words Syllune listens for (each marked if it
+    # was learned rather than typed) and the spellings it always corrects.
     def dictionary(self) -> dict:
-        words = self._hotwords()
+        settings = self._dictionary_settings()
+        learned = {word.lower() for word in settings['learned']}
+        words = [{'word': word, 'learned': word.lower() in learned} for word in self._hotwords()]
         replacements = [_plain_replacement(item) for item in self._replacements()]
-        known = set(words)
-        for item in replacements:
-            known.update(str(item.get('to', '')).split())
-        texts = [entry.get('text', '') for entry in load_transcripts()[:500]]
-        suggestions = [{'word': word, 'count': count}
-                       for word, count in suggest_hotwords(texts, known=known, min_count=3, limit=12)]
-        return {'words': words, 'replacements': replacements, 'suggestions': suggestions}
+        return {'words': words, 'replacements': replacements, 'auto_learn': settings['auto_learn']}
 
-    def dictionary_add(self, word: str) -> dict:
+    # `heard` is optional: what Syllune keeps writing instead of the word. With
+    # it the word is listened for and that spelling is corrected as well.
+    def dictionary_add(self, word: str, heard: str = '') -> dict:
         word = _require_term(word)
         words = self._hotwords()
         if word.lower() not in {w.lower() for w in words}:
             self._set_hotwords(words + [word])
+        settings = self._dictionary_settings()
+        ignored = [w for w in settings['ignored'] if w.lower() != word.lower()]
+        if ignored != settings['ignored']:
+            self.config.update_user_setting('dictionary', 'ignored', ignored)
+        if str(heard or '').strip():
+            self._add_replacement(_require_term(heard), word)
         return self.dictionary()
 
+    # A removed word is remembered, so learning never brings it back.
     def dictionary_remove(self, word: str) -> dict:
+        word = str(word or '')
         words = self._hotwords()
         self._set_hotwords([w for w in words if w != word])
+        settings = self._dictionary_settings()
+        self.config.update_user_setting('dictionary', 'learned', [w for w in settings['learned'] if w != word])
+        if word.strip() and word.lower() not in {w.lower() for w in settings['ignored']}:
+            self.config.update_user_setting('dictionary', 'ignored', (settings['ignored'] + [word])[-MAX_IGNORED_WORDS:])
         return self.dictionary()
 
-    def replacement_add(self, heard: str, fixed: str) -> dict:
-        self._add_replacement(_require_term(heard), _require_term(fixed))
+    def dictionary_auto(self, enabled: bool) -> dict:
+        self.config.update_user_setting('dictionary', 'auto_learn', _require_bool(enabled))
+        if enabled:
+            self._learn()
         return self.dictionary()
+
+    # Called by the engine each time a dictation is saved. History is only
+    # read every few dictations, off the dictation's own thread.
+    def learn_words(self):
+        self._dictations_since_learning += 1
+        if self._dictations_since_learning >= LEARN_EVERY:
+            self._dictations_since_learning = 0
+            self._pool.submit(self._learn_in_background)
+
+    def _learn_in_background(self):
+        try:
+            with self._write_lock:
+                added = self._learn()
+            if added:
+                logger.info(f"Dictionary learned {len(added)} word(s)")
+                self.state._notify_hub('dictionary')
+        except Exception as e:
+            logger.warning(f"Could not learn words from history: {e}")
+
+    # Adds the names and terms that keep coming up in recent dictations to the
+    # running recogniser and to user_settings.yaml. Returns what was added.
+    def _learn(self) -> list:
+        settings = self._dictionary_settings()
+        if not settings['auto_learn']:
+            return []
+        words = self._hotwords()
+        # A spelling that is already corrected needs no help from the recogniser.
+        ignored = list(settings['ignored'])
+        for item in self._replacements():
+            ignored.extend(str(item.get('to', '')).split())
+        texts = [entry.get('text', '') for entry in load_transcripts()[:LEARN_HISTORY]]
+        added = words_to_learn(texts, words, settings['learned'], ignored)
+        if added:
+            self._set_hotwords(words + added)
+            kept = [w for w in settings['learned'] if w in words]
+            self.config.update_user_setting('dictionary', 'learned', kept + added)
+        return added
+
+    def _dictionary_settings(self) -> dict:
+        section = self.config.config.get('dictionary') or {}
+        return {
+            'auto_learn': bool(section.get('auto_learn', True)),
+            'learned': [str(word) for word in section.get('learned') or []],
+            'ignored': [str(word) for word in section.get('ignored') or []],
+        }
 
     def replacement_remove(self, heard: str) -> dict:
         heard = str(heard or '').strip().lower()
@@ -342,7 +406,10 @@ class HubApi:
     def _set_hotwords(self, words: list):
         self.config.update_user_setting('whisper', 'hotwords', list(words))
         from .whisper_engine import join_hotwords
-        self.state.whisper_engine.hotwords = join_hotwords(words)
+        # While the model is still loading there is no recogniser to tell yet;
+        # it reads the saved list when it starts.
+        if self.state.whisper_engine is not None:
+            self.state.whisper_engine.hotwords = join_hotwords(words)
 
     # postprocess.replacements, refreshed from disk by the postprocess
     # hot-reload, so an edit made elsewhere is never overwritten.
@@ -458,14 +525,13 @@ class HubApi:
         overlay = self.config.config.get('overlay') or {}
         editor = self.state.smart_editor
         models = editor.available_models()
-        devices = self.state.get_available_audio_devices() or []
         autostart_supported = autostart.is_supported()
         return {
             'quality': self.state.current_quality(),
             'short_messages': self.state.short_message_seconds(),
             'keep_audio': bool((self.config.config.get('history') or {}).get('keep_audio', True)),
-            'mics': [{'id': device['id'], 'name': device['name']} for device in devices],
-            'mic': self.state.get_current_audio_device_id(),
+            'mics': self.state.microphone_choices(),
+            'mic': self.state.configured_microphone(),
             'ai_model': str(ai.get('model') or 'gemma3:4b'),
             'ai_models': models,
             'ai_reachable': bool(models) or editor.reachable(),
@@ -508,13 +574,10 @@ class HubApi:
     def _set_about_me(self, value):
         self.config.update_user_setting('ai', 'about_me', str(value or '').strip()[:MAX_ABOUT_ME])
 
+    # `value` is "default" or a microphone name from settings()['mics'].
     def _set_mic(self, value):
-        devices = {device['id']: device['name'] for device in self.state.get_available_audio_devices() or []}
-        if value not in devices:
+        if not isinstance(value, str) or not self.state.select_microphone(value):
             raise ValueError("That microphone isn't connected")
-        if self.state.request_audio_device_change(value, devices[value]):
-            self.config.update_user_setting('audio', 'input_device', value)
-            self.state.system_tray.refresh_menu()
 
     # Seconds of recording that still count as a short message (0 = off).
     # Read per recording, so it applies from the next dictation.

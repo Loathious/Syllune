@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 APP_NAME = 'Syllune'
-VERSION = '0.24.2'
+VERSION = '0.25.0'
 
 
 def repository() -> str:

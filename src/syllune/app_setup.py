@@ -163,8 +163,8 @@ class AppSetup:
             'models': models,
             'free_bytes': free_bytes, 'ready': bool(self._ready(selected)),
             'download': transfer, 'mic_test': mic,
-            'mics': self.state.get_available_audio_devices() or [],
-            'mic': self.state.get_current_audio_device_id(),
+            'mics': self.state.microphone_choices(),
+            'mic': self.state.configured_microphone(),
             'languages': list(self.config.get_whisper_config().get('languages') or []),
             'language_options': [{'value': code, 'label': name} for code, name in LANGUAGE_NAMES.items()],
             'hotkeys': {'record': str(hotkeys.get('recording_hotkey') or 'Ctrl+Win'),
@@ -187,9 +187,8 @@ class AppSetup:
                     or any(not isinstance(code, str) or code not in LANGUAGE_NAMES for code in languages)):
                 raise ValueError('Choose supported spoken languages')
         if 'mic' in values:
-            devices = {device['id'] for device in self.state.get_available_audio_devices() or []}
-            if (isinstance(values['mic'], bool) or not isinstance(values['mic'], (str, int))
-                    or values['mic'] not in devices):
+            choices = {entry['id'] for entry in self.state.microphone_choices()}
+            if not isinstance(values['mic'], str) or values['mic'] not in choices:
                 raise ValueError("That microphone isn't connected")
             if not self._idle():
                 raise ValueError('Finish the current recording, meeting or dictation before changing microphone')
@@ -322,8 +321,8 @@ class AppSetup:
             self._mic = {'active': False, 'tested': False, 'level': 0, 'peak': 0, 'heard': False, 'error': ''}
             stream = None
             try:
-                device = self.state.get_current_audio_device_id()
-                stream = sd.InputStream(device=None if device == 'default' else device,
+                # The index the recorder is bound to; None is the system default.
+                stream = sd.InputStream(device=self.state.audio_recorder.device,
                                         channels=1, dtype='float32', callback=level)
                 stream.start()
                 self._mic_stream = stream

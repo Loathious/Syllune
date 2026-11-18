@@ -349,8 +349,10 @@ clipboard: # Clipboard Behavior
     # Lets clipboard listeners (e.g. Windows Clipboard History) finish reading
     paste_pre_paste_delay: 0.05
 
-    # Restore original clipboard contents after delivery (paste mode)
-    paste_preserve_clipboard: true
+    # Put back what was on the clipboard before the dictation was pasted.
+    # Off by default: the latest dictation stays on the clipboard, so it can
+    # be pasted again anywhere with Ctrl+V.
+    paste_preserve_clipboard: false
 
     # Delay before clipboard restore (seconds, paste mode)
     paste_clipboard_restore_delay: 0.5
@@ -669,6 +671,17 @@ postprocess: # Transcription post-processing pipeline
             Polish this dictation. Fix punctuation and capitalization only. Do not change wording or add anything. Output ONLY the polished text:
 
             {text}
+
+dictionary: # How whisper.hotwords grows by itself (the hub's Dictionary page)
+    # Names and terms that keep coming up in your dictations are added to
+    # whisper.hotwords automatically.
+    auto_learn: true
+
+    # Managed automatically. `learned` is the part of whisper.hotwords that was
+    # added for you; `ignored` holds words you removed, which are never learned
+    # again.
+    learned: []
+    ignored: []
 
 ai: # Local AI edit after Whisper (smart_edit.py), run by Ollama on this PC
     # Fixes punctuation, casing, sentence breaks and recognition slips, drops

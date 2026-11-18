@@ -41,9 +41,14 @@ def _launch_command() -> list:
     return build_relaunch_command(windowless=True)
 
 
+# A Windows login start carries this flag: the app comes up as just the pill
+# and the tray icon, without opening its window over whatever the user is doing.
+BACKGROUND_FLAG = "--background"
+
+
 def _win_command_string() -> str:
     # winreg Run values are a single command string; quote each part with spaces.
-    parts = _launch_command()
+    parts = _launch_command() + [BACKGROUND_FLAG]
     return " ".join(f'"{p}"' if " " in p else p for p in parts)
 
 
@@ -359,6 +364,24 @@ def repair_if_broken() -> bool:
         return True
     except Exception as e:
         logger.debug(f"Autostart repair check failed: {e}")
+        return False
+
+
+# Entries written before BACKGROUND_FLAG existed open the window at every
+# login. Rewritten only when the stored value is exactly this install's own
+# command without the flag, so a hand-edited entry is left alone.
+def adopt_background_start() -> bool:
+    try:
+        if sys.platform != "win32" or not _win_is_enabled():
+            return False
+        wanted = _win_command_string()
+        stored = _win_stored_command().strip()
+        if BACKGROUND_FLAG in stored or f"{stored} {BACKGROUND_FLAG}" != wanted:
+            return False
+        _win_enable()
+        return True
+    except Exception as e:
+        logger.debug(f"Autostart background upgrade skipped: {e}")
         return False
 
 

@@ -35,14 +35,26 @@ class ClipboardManager:
             self._test_clipboard_access()
         self._print_status()
 
+    # Only a log line. Windows lets one program hold the clipboard at a time, so
+    # this read fails whenever another app happens to be using it; raising here
+    # used to stop the whole engine from starting over a momentary clash.
     def _test_clipboard_access(self):
         try:
             pyperclip.paste()
             self.logger.info("Clipboard access test successful")
-
         except Exception as e:
-            self.logger.error(f"Clipboard access test failed: {e}")
-            raise
+            self.logger.warning(f"Clipboard is busy at startup, continuing: {e}")
+
+    # Runs a clipboard call, trying again when another program holds the
+    # clipboard for a moment (clipboard managers and remote-desktop tools do).
+    def _with_clipboard_retry(self, call, attempts: int = 4):
+        for attempt in range(attempts):
+            try:
+                return call()
+            except Exception:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.12)
 
     def _print_status(self):
         hotkey_display = self.paste_hotkey.upper()
@@ -74,7 +86,7 @@ class ClipboardManager:
 
         try:
             self.logger.info(f"Copying text to clipboard ({len(text)} chars)")
-            pyperclip.copy(text)
+            self._with_clipboard_retry(lambda: pyperclip.copy(text))
             return True
 
         except Exception as e:
@@ -156,6 +168,12 @@ class ClipboardManager:
         except Exception as e:
             self.logger.error(f"Failed to simulate paste keypress: {e}")
             return inserted
+
+    # Always clipboard + paste, whatever the delivery method. Text with line
+    # breaks (a structured prompt) must not be typed key by key: in a chat box
+    # every typed Enter would send the message.
+    def paste_text(self, text: str) -> bool:
+        return self._clipboard_paste(text)
 
     def execute_delivery(self, text: str) -> bool:
         if self.delivery_method == "type":

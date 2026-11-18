@@ -21,6 +21,7 @@
 import collections
 import logging
 import os
+import re
 import time
 import threading
 import platform
@@ -30,7 +31,7 @@ from typing import Optional
 
 import sounddevice as sd
 
-from .audio_recorder import AudioRecorder
+from .audio_recorder import AudioRecorder, find_input_device
 from .whisper_engine import WhisperEngine
 from .clipboard_manager import ClipboardManager
 from .system_tray import SystemTray
@@ -64,12 +65,15 @@ QUALITY_PROFILES = {
 SHORT_MESSAGE_SECONDS = (0, 3, 5, 8)
 # How often a recording start may ping Ollama to keep the AI model loaded.
 AI_WARM_INTERVAL_SECONDS = 120
+# What Whisper's errors look like when the GPU (or RAM) is full. The usual
+# cause is the AI model and the speech model wanting the same memory.
+OUT_OF_MEMORY = re.compile(r'out of memory|mkl_malloc|bad_alloc|failed to allocate', re.IGNORECASE)
 from .hub_api import HubApi
 from .meetings import MeetingController, MeetingStore
 from .stats import record_transcription
 from .audit_log import record as audit_record
 from .terminal_title import TerminalTitle
-from .transcript_log import record_transcript, pending_transcripts, update_delivery
+from .transcript_log import record_transcript, pending_transcripts, update_delivery, update_transcript
 from .recording_archive import save_recording
 from .pending_delivery import PendingDelivery
 from .platform import foreground, audio_endpoints
@@ -188,15 +192,24 @@ class StateManager:
         self.pending_delivery = PendingDelivery(
             pending_transcripts, update_delivery,
             lambda text: self.clipboard_manager.deliver_transcription(text, False),
-            self._pending_target_allowed, self._current_text_target, self._refresh_pending)
+            self._pending_target_allowed, self._refresh_pending)
+        # The question the pill is asking right now, when each waiting
+        # dictation stops being offered, and how often it has been already.
+        self._offer = None
+        self._pending_lock = threading.RLock()
+        self._pending_deadlines = {}
+        self._pending_offers_shown = {}
+        self._pending_expiry_timer = None
+        # Identifies the newest background prompt preparation; older ones
+        # finish quietly.
+        self._prompt_request = None
 
     def attach_components(self,
                           audio_recorder: AudioRecorder,
                           system_tray: Optional[SystemTray]):
         self.audio_recorder = audio_recorder
         self.system_tray = OptionalComponent(system_tray)
-        self._ensure_audio_device_for_host(self._current_audio_host)
-        self._start_default_input_watcher()
+        self._start_microphone_watcher()
 
         try:
             self.transforms_manager.system_tray = system_tray
@@ -228,6 +241,8 @@ class StateManager:
         # After game mode, so a meeting left over from last run waits for a
         # game that is already running.
         self.meetings.start()
+        # A dictation left waiting by the last run is history now, not an offer.
+        self.pending_delivery.retire_all()
         self._refresh_pending()
 
     # =========================================================================
@@ -398,8 +413,13 @@ class StateManager:
     # opens the meeting or stops it instead.
     def _on_overlay_action(self, message: dict):
         action = message.get('action')
-        if action in ('open_hub', 'pending_open'):
-            self.open_hub('history' if action == 'pending_open' else 'home')
+        if action == 'open_hub':
+            self.open_hub('home')
+            return
+        # "Yes" to the pill's question. Off this reader thread: pasting waits
+        # on other apps, and the pill's next click must still get through.
+        if action == 'offer_accept':
+            threading.Thread(target=self._accept_offer, daemon=True, name='offer-accept').start()
             return
         # The pill was dragged and snapped to one of the fixed positions.
         if action == 'pill_position':
@@ -481,6 +501,23 @@ class StateManager:
             self.logger.debug(f"Editable target unavailable: {e}")
             return None
 
+    # ── Offers ───────────────────────────────────────────────────────────────
+    # Nothing is typed behind the user's back. A dictation that found no text
+    # field is copied to the clipboard and kept waiting; the next click into a
+    # text field makes the pill ask "Paste dictation?". In AI apps a structured
+    # prompt version is prepared in the background and offered the same way.
+    # One question is on the pill at a time, and a click on it is the only yes.
+
+    # How long a waiting dictation keeps being offered, and how many times.
+    PENDING_OFFER_SECONDS = 300
+    PENDING_OFFER_LIMIT = 3
+    # How long each question stays on the pill.
+    PASTE_OFFER_SECONDS = 12
+    PROMPT_OFFER_SECONDS = 25
+    # Shorter dictations gain nothing from being laid out as a prompt.
+    PROMPT_OFFER_MIN_WORDS = 12
+    PROMPT_EDIT_TIMEOUT_SECONDS = 25
+
     def _pending_target_allowed(self, target):
         if (self.is_paused or self.is_processing or self.is_model_loading or self.game_mode.active
                 or self.audio_recorder.get_recording_status() or not self.clipboard_manager.auto_paste):
@@ -490,28 +527,184 @@ class StateManager:
         rule = self.app_rules.match_for_foreground() or {}
         return not rule.get('suppress') and rule.get('auto_paste') is not False
 
-    # Watch for clicks only while a queue exists and the user is not gaming.
+    # Puts a question on the pill. False without the Electron pill to ask it.
+    def _show_offer(self, offer: dict, label: str, seconds: float) -> bool:
+        show = getattr(self.level_overlay, 'show_offer', None)
+        if not show:
+            return False
+        offer['until'] = time.monotonic() + seconds
+        self._offer = offer
+        show(offer['kind'], label, seconds)
+        return True
+
+    # Takes the question back: a new recording makes it stale, and a prompt
+    # still being prepared for the previous dictation is no longer wanted.
+    def _clear_offer(self):
+        self._prompt_request = None
+        if getattr(self, '_offer', None) is None:
+            return
+        self._offer = None
+        clear = getattr(self.level_overlay, 'clear_offer', None)
+        if clear:
+            clear()
+
+    # A click landed in a text field while a dictation waits: ask, never type.
+    def _offer_pending(self, target):
+        entry = self.pending_delivery.latest()
+        if not entry or not self._pending_target_allowed(target):
+            return
+        shown = self._pending_offers_shown.get(entry['id'], 0)
+        if shown >= self.PENDING_OFFER_LIMIT:
+            # Asked enough. It stays on the clipboard and in History.
+            self.pending_delivery.retire_all()
+            return
+        if self._show_offer({'kind': 'paste'}, 'Paste dictation?', self.PASTE_OFFER_SECONDS):
+            self._pending_offers_shown[entry['id']] = shown + 1
+
+    # The user clicked the pill's question. The pill never takes focus, so the
+    # window in front is still the one the user was working in.
+    def _accept_offer(self):
+        offer, self._offer = self._offer, None
+        if not offer or time.monotonic() > offer['until'] + 1.0 or self.get_current_state() != 'idle':
+            return
+        try:
+            self._wait_for_modifiers_released()
+            if offer['kind'] == 'paste':
+                target = self._current_text_target() or foreground.get_foreground_app()
+                done = self.pending_delivery.insert(target)
+                problem = 'Click a text field first'
+            else:
+                done = self._replace_with_prompt(offer)
+                problem = 'Could not replace the text'
+        except Exception:
+            self.logger.error('Offer could not be completed', exc_info=True)
+            done, problem = False, None
+        if not self.level_overlay:
+            return
+        if done:
+            self.level_overlay.flash_success()
+        else:
+            self.level_overlay.flash_failure(problem)
+
+    # Watch for clicks only while a dictation waits, a pill can ask about it,
+    # and the user is not gaming.
     def _refresh_pending(self):
         entries = pending_transcripts()
-        set_pending = getattr(self.level_overlay, 'set_pending', None)
-        if set_pending:
-            set_pending(len(entries))
         self._notify_hub('transcript')
-        watch = bool(entries) and not self.game_mode.active
+        self._schedule_pending_expiry(entries)
+        can_ask = bool(getattr(self.level_overlay, 'show_offer', None))
+        watch = bool(entries) and can_ask and not self.game_mode.active
         if watch and self._target_watcher is None:
             try:
                 module = self._text_target_module()
                 if module:
-                    self._target_watcher = module.TextTargetWatcher(self.pending_delivery.insert)
+                    self._target_watcher = module.TextTargetWatcher(self._offer_pending)
                     self._target_watcher.start()
             except Exception as e:
-                self.logger.warning(f"Pending insertion watcher unavailable: {e}")
+                self.logger.warning(f"Paste offer watcher unavailable: {e}")
                 self._target_watcher = None
         elif not watch and self._target_watcher is not None:
             self._target_watcher.stop()
             self._target_watcher = None
 
+    # Every waiting dictation gets a deadline; one timer waits for the nearest.
+    def _schedule_pending_expiry(self, entries):
+        with self._pending_lock:
+            now = time.monotonic()
+            waiting = {entry['id'] for entry in entries}
+            for entry_id in waiting:
+                self._pending_deadlines.setdefault(entry_id, now + self.PENDING_OFFER_SECONDS)
+            for gone in set(self._pending_deadlines) - waiting:
+                del self._pending_deadlines[gone]
+                self._pending_offers_shown.pop(gone, None)
+            if self._pending_expiry_timer:
+                self._pending_expiry_timer.cancel()
+                self._pending_expiry_timer = None
+            if self._pending_deadlines:
+                delay = max(0.5, min(self._pending_deadlines.values()) - now)
+                self._pending_expiry_timer = threading.Timer(delay, self._expire_pending)
+                self._pending_expiry_timer.daemon = True
+                self._pending_expiry_timer.start()
+
+    # A dictation nobody pasted in time stays in History ("Saved without
+    # insertion"), and the click watcher can stop.
+    def _expire_pending(self):
+        with self._pending_lock:
+            now = time.monotonic()
+            for entry_id, deadline in list(self._pending_deadlines.items()):
+                if deadline <= now and not update_delivery(entry_id, 'failed'):
+                    # The journal could not be written; ask again later rather
+                    # than spin on it.
+                    self._pending_deadlines[entry_id] = now + self.PENDING_OFFER_SECONDS
+        self._refresh_pending()
+
+    # After a dictation was pasted, as spoken, into an AI app (a rule with
+    # `prompt_offer`): prepare a structured prompt version in the background.
+    # `sent` means the message already went off with Enter.
+    def _maybe_offer_prompt(self, text, rule, app, entry, sent, vocabulary):
+        if sent or not (rule or {}).get('prompt_offer'):
+            return
+        if not getattr(self.level_overlay, 'show_offer', None):
+            return
+        # Fast quality keeps the AI model out of memory on purpose.
+        if self.current_quality() == 'fast' or not self.smart_editor.enabled():
+            return
+        if len(text.split()) < self.PROMPT_OFFER_MIN_WORDS:
+            return
+        self._prompt_request = request = object()
+        language = getattr(self.whisper_engine, 'last_language', None) or ''
+        threading.Thread(target=self._prepare_prompt_offer, daemon=True, name='prompt-offer',
+                         args=(request, text, str(app.get('exe', '')), entry, vocabulary, language)).start()
+
+    def _prepare_prompt_offer(self, request, text, exe, entry, vocabulary, language):
+        try:
+            prompt = self.smart_editor.edit(text, style='structure', vocabulary=vocabulary,
+                                            language=language, timeout=self.PROMPT_EDIT_TIMEOUT_SECONDS)
+        except Exception:
+            self.logger.warning('Prompt version could not be prepared', exc_info=True)
+            return
+        if not prompt or prompt.strip() == text.strip():
+            return
+        # Offer it only while the pasted text is still the thing in front of
+        # the user: no newer dictation, and the same app.
+        if request is not self._prompt_request or self.get_current_state() != 'idle':
+            return
+        if (foreground.get_foreground_app() or {}).get('exe', '') != exe:
+            return
+        self._show_offer({'kind': 'prompt', 'pasted': text, 'prompt': prompt, 'exe': exe, 'entry': entry},
+                         'Use as prompt', self.PROMPT_OFFER_SECONDS)
+
+    # Swaps the dictation that was just pasted for its prompt version: one
+    # Backspace per pasted character, then a paste. The cursor is assumed to
+    # still be at the end of that text, which is why the offer is short-lived
+    # and tied to the app it was pasted into.
+    def _replace_with_prompt(self, offer) -> bool:
+        if (foreground.get_foreground_app() or {}).get('exe', '') != offer['exe']:
+            return False
+        from .platform import keyboard
+        for _ in offer['pasted'].replace('\r\n', '\n'):
+            keyboard.send_key('backspace')
+        time.sleep(0.05)
+        if not self.clipboard_manager.paste_text(offer['prompt']):
+            return False
+        self.last_transcription = offer['prompt']
+        self.recent_transcriptions.appendleft(offer['prompt'])
+        self.system_tray.refresh_menu()
+        entry = offer.get('entry')
+        if entry:
+            update_transcript(entry.get('timestamp', ''), offer['pasted'], offer['prompt'])
+            self._notify_hub('transcript')
+        return True
+
     # Save before delivery so a failed paste or a missing field cannot lose text.
+    # The dictionary picks up names you keep saying. It is a nicety: whatever
+    # goes wrong there must never cost the dictation that was just saved.
+    def _learn_words(self):
+        try:
+            self.hub_api.learn_words()
+        except Exception as e:
+            self.logger.debug(f"Skipped learning words: {e}")
+
     def _save_dictation(self, text, audio, duration, original):
         recording_id = None
         history = self.config_manager.config.get('history') or {}
@@ -524,6 +717,7 @@ class StateManager:
         entry = record_transcript(text, app=fg.get('exe', ''), duration_s=duration,
             retention_days=self._history_retention_days(), delivery='pending',
             recording_id=recording_id, original_text=original)
+        self._learn_words()
         self.last_transcription = text
         self.recent_transcriptions.appendleft(text)
         self.system_tray.refresh_menu()
@@ -584,8 +778,26 @@ class StateManager:
         self.media_pause.resume()
         self._run_pipeline_async(audio_data, use_auto_enter=False)
 
+    # True while a push-to-talk key is physically held down (not double-tap locked).
+    def _push_to_talk_held(self) -> bool:
+        listener = getattr(self, '_hotkey_listener_ref', None)
+        if not listener:
+            return False
+        latches = (getattr(listener, 'tap_latch', None), getattr(listener, 'note_latch', None))
+        return any(latch and latch.state == latch.HELD for latch in latches)
+
     def handle_vad_event(self, event: VadEvent):
         if event == VadEvent.SILENCE_TIMEOUT:
+            # Holding the key says "I'm still here": a long pause to think must
+            # not end the dictation. The timeout stays as the safety net for
+            # hands-free recordings, where a forgotten stop would otherwise run
+            # to the maximum duration. Re-arming the detector keeps that net in
+            # place for the rest of this recording.
+            if self._push_to_talk_held():
+                detector = getattr(self.audio_recorder, 'continuous_vad', None)
+                if detector:
+                    detector.reset()
+                return
             self.logger.info("VAD silence timeout detected - stopping recording")
             timeout_seconds = int(self.vad_manager.vad_silence_timeout_seconds)
             self._clear_streaming_display()
@@ -827,6 +1039,7 @@ class StateManager:
             # Only spin up the streaming-delivery worker once recording is
             # confirmed — otherwise a failed start would leak the worker thread.
             self._setup_streaming_delivery()
+            self._clear_offer()
             self._warm_ai_model()
             print("\n🎤 Recording started! Speak now...")
             self.config_manager.print_stop_instructions_based_on_config()
@@ -918,6 +1131,7 @@ class StateManager:
         record_transcription(char_count=len(text), duration_seconds=duration, app=fg.get('exe', ''))
         record_transcript(text, app=fg.get('exe', ''), duration_s=duration,
                           retention_days=self._history_retention_days())
+        self._learn_words()
         self._notify_hub('transcript')
         audit_enabled = (self.config_manager.config.get('audit') or {}).get('enabled', False)
         audit_record('delivered', text, fg.get('exe', ''), audit_enabled)
@@ -1151,7 +1365,7 @@ class StateManager:
             short_message = duration <= self.short_message_seconds()
             quick = (not command_mode and not rephrase_mode and short_message and profile['quick_path'])
             use_ai_edit = profile['ai_short'] if short_message else profile['ai_long']
-            transcribed_text = self.whisper_engine.transcribe_audio(audio_data, quick=quick)
+            transcribed_text = self._transcribe(audio_data, quick)
             self._offer_outsider_language()
 
             if not transcribed_text:
@@ -1229,10 +1443,16 @@ class StateManager:
 
             if (not self._foreground_is_textable() or not self.clipboard_manager.auto_paste
                     or (rule and rule.get('auto_paste') is False)):
-                self.logger.info('Dictation saved; waiting for a click into an editable field')
+                # No text field to type into (or a copy-only app): the words
+                # go to the clipboard right away, and the pill offers to paste
+                # them at the next click into a text field.
+                self.logger.info('Dictation saved and copied; offered at the next click into a text field')
+                copied = bool(self.clipboard_manager.silent_copy_allowed
+                              and self.clipboard_manager.copy_text(transcribed_text))
                 self._refresh_pending()
                 if self.level_overlay:
-                    self.level_overlay.flash_success()
+                    flash_copied = getattr(self.level_overlay, 'flash_copied', None) if copied else None
+                    (flash_copied or self.level_overlay.flash_success)()
                 return
 
             effective_auto_enter = use_auto_enter
@@ -1287,6 +1507,8 @@ class StateManager:
                 self._notify_hub('transcript')
                 audit_enabled = (self.config_manager.config.get('audit') or {}).get('enabled', False)
                 audit_record('delivered', transcribed_text, fg.get('exe', ''), audit_enabled)
+                self._maybe_offer_prompt(transcribed_text, rule, fg, saved_entry, effective_auto_enter,
+                                         self._vocabulary(raw_postprocess_cfg))
                 self._maybe_restart_continuous()
             elif self.level_overlay:
                 self.level_overlay.flash_failure()
@@ -1325,6 +1547,20 @@ class StateManager:
             self._drain_pending_changes()
             if not (pending_device or self.is_model_loading):
                 self._update_ui_state("idle")
+
+    # One transcription, with a second attempt when the first ran out of
+    # memory. The AI model is asked to leave first: it is the only memory this
+    # app can give back, and a dictation is worth more than its polish.
+    def _transcribe(self, audio_data, quick: bool):
+        text = self.whisper_engine.transcribe_audio(audio_data, quick=quick)
+        failure = getattr(self.whisper_engine, 'last_error', None)
+        if text or not isinstance(failure, str) or not OUT_OF_MEMORY.search(failure):
+            return text
+        self.logger.warning(f"Transcription ran out of memory ({failure[:120]}); "
+                            "unloading the AI model and trying once more")
+        self.smart_editor.unload()
+        time.sleep(2.0)
+        return self.whisper_engine.transcribe_audio(audio_data, quick=quick)
 
     # history.retention_days: None keeps everything, 0 stores nothing, N keeps
     # N days. Read per delivery, so a change applies without a restart.
@@ -1746,7 +1982,8 @@ class StateManager:
                 self.clipboard_manager.copy_text(text)
                 self.system_tray.notify("Last dictation copied — this app is copy-only.")
                 return True
-            self.clipboard_manager.deliver_transcription(text, use_auto_enter=False)
+            if self.clipboard_manager.deliver_transcription(text, use_auto_enter=False):
+                self.pending_delivery.settle(text)
         except Exception as e:
             self.logger.error(f"Paste-last failed: {e}")
             self.system_tray.notify("Couldn't paste the last dictation.")
@@ -1840,7 +2077,61 @@ class StateManager:
         self.system_tray.refresh_menu()
         return True
 
-    def request_audio_device_change(self, device_id: int, device_name: str):
+    # ── Microphone selection ─────────────────────────────────────────────────
+    # The setting holds "default" or a device NAME. PortAudio indexes are
+    # reassigned whenever something is plugged in or removed, so a saved index
+    # used to point at a different microphone on the next start.
+
+    # The microphone the user chose: "default" or a device name.
+    def configured_microphone(self) -> str:
+        try:
+            value = self.config_manager.get_setting('audio', 'input_device')
+        except KeyError:
+            value = None
+        return value.strip() if isinstance(value, str) and value.strip() else 'default'
+
+    # The PortAudio index to open right now: the chosen microphone when it is
+    # connected, otherwise the host's default input as a stand-in.
+    def resolve_microphone(self) -> Optional[int]:
+        wanted = self.configured_microphone()
+        if wanted != 'default':
+            index = find_input_device(wanted, self._current_audio_host)
+            if index is not None:
+                return index
+        if self._current_audio_host:
+            return self._get_default_device_for_host(self._current_audio_host)
+        return None
+
+    # What Settings and the tray list: the default, every connected microphone,
+    # and the chosen one even while it is unplugged, so the choice stays visible.
+    def microphone_choices(self) -> list:
+        choices = [{'id': 'default', 'name': 'Windows default' if platform.system() == 'Windows' else 'System default'}]
+        seen = {'default'}
+        for device in self.get_available_audio_devices() or []:
+            name = str(device.get('name') or '').strip()
+            if name and name.lower() not in seen:
+                seen.add(name.lower())
+                choices.append({'id': name, 'name': name})
+        wanted = self.configured_microphone()
+        if wanted.lower() not in seen:
+            choices.append({'id': wanted, 'name': f"{wanted} (not connected)"})
+        return choices
+
+    # Saves the user's choice ("default" or a listed name) and switches to it.
+    def select_microphone(self, choice: str) -> bool:
+        if choice not in {entry['id'] for entry in self.microphone_choices()}:
+            return False
+        self.config_manager.update_user_setting('audio', 'input_device', choice)
+        self._bind_microphone()
+        self.system_tray.refresh_menu()
+        return True
+
+    # Points the recorder at whatever resolve_microphone() says, when that differs.
+    def _bind_microphone(self) -> bool:
+        device_id = self.resolve_microphone()
+        return self.request_audio_device_change(device_id, self._get_device_name(device_id))
+
+    def request_audio_device_change(self, device_id: Optional[int], device_name: str):
         current_state = self.get_current_state()
 
         if device_id == self.audio_recorder.device:
@@ -1857,46 +2148,35 @@ class StateManager:
             self._pending_device_change = (device_id, device_name)
             return True
 
-        if current_state == "idle":
-            self._execute_audio_device_change(device_id, device_name)
-            return True
+        # Idle, or the speech model is still loading: nothing uses the stream.
+        self._execute_audio_device_change(device_id, device_name)
+        return True
 
-        self.logger.warning(f"Unexpected state for device change: {current_state}")
-        return False
-
-    def _execute_audio_device_change(self, device_id: int, device_name: str):
+    def _execute_audio_device_change(self, device_id: Optional[int], device_name: str):
         try:
             print(f"🎤 Switching to: {device_name}")
 
-            channels = self.audio_recorder.channels
-            dtype = self.audio_recorder.dtype
-            max_duration = self.audio_recorder.max_duration
-            on_max_duration = self.audio_recorder.on_max_duration_reached
-            vad_manager = self.audio_recorder.vad_manager
-            streaming_manager = self.audio_recorder.streaming_manager
-            on_streaming_result = self.audio_recorder.on_streaming_result
-
             audio_cfg = self.config_manager.config.get('audio') or {}
             noise_cfg = audio_cfg.get('noise_suppression') or {}
-            new_recorder = AudioRecorder(
-                on_vad_event=self.handle_vad_event,
-                channels=channels,
-                dtype=dtype,
-                max_duration=max_duration,
-                on_max_duration_reached=on_max_duration,
-                vad_manager=vad_manager,
-                streaming_manager=streaming_manager,
-                on_streaming_result=on_streaming_result,
-                device=device_id if device_id != -1 else None,
-                noise_suppression_config=noise_cfg,
-                whisper_mode_config=audio_cfg.get('whisper_mode') or {},
-            )
-
-            # Close the old stream, otherwise it keeps capturing in the background.
             with self._recorder_lock:
                 old_recorder = self.audio_recorder
-                self.audio_recorder = new_recorder
+                # The old stream is closed BEFORE the new one opens. Two streams
+                # on one WASAPI device is what produced the "unanticipated host
+                # error" that used to knock the app off the chosen microphone.
                 old_recorder.shutdown()
+                self.audio_recorder = AudioRecorder(
+                    on_vad_event=self.handle_vad_event,
+                    channels=old_recorder.channels,
+                    dtype=old_recorder.dtype,
+                    max_duration=old_recorder.max_duration,
+                    on_max_duration_reached=old_recorder.on_max_duration_reached,
+                    vad_manager=old_recorder.vad_manager,
+                    streaming_manager=old_recorder.streaming_manager,
+                    on_streaming_result=old_recorder.on_streaming_result,
+                    device=device_id if device_id is not None and device_id >= 0 else None,
+                    noise_suppression_config=noise_cfg,
+                    whisper_mode_config=audio_cfg.get('whisper_mode') or {},
+                )
 
             print(f"✅ Successfully switched audio device to: {device_name}")
 
@@ -1904,72 +2184,85 @@ class StateManager:
             self.logger.error(f"Failed to change audio device: {e}")
             print(f"❌ Failed to switch audio device: {e}")
 
-    # ── Following the system default microphone ──────────────────────────────
-    # With `input_device: default` the mic is resolved once at startup, and
-    # PortAudio never refreshes its device list by itself. After a dock switch
-    # or a wake-up at a desk with other hardware, recordings would keep using
-    # the old (or a dead) mic. This thread polls the OS default input and
-    # rebinds when it changes or when the capture stream has died.
-    DEFAULT_INPUT_POLL_SECONDS = 2.0
+    # ── Keeping the microphone bound ─────────────────────────────────────────
+    # PortAudio lists devices once, at init, and never notices a dock switch, a
+    # headset that powered off or a wake-up at another desk. This thread watches
+    # three cheap signals (the OS default input, the number of capture devices,
+    # whether our stream still delivers audio) and, only while idle, re-reads
+    # the device list and rebinds: to the chosen microphone when it is there,
+    # to the default input while it is not, and back again when it returns.
+    MICROPHONE_POLL_SECONDS = 2.0
+    # A stream must be silent for this many polls before it is rebuilt, so a
+    # reopen the recorder is already doing by itself is not interrupted.
+    DEAD_CAPTURE_POLLS = 2
+    # After a rebuild that did not help, wait this many polls before the next.
+    DEAD_CAPTURE_RETRY_POLLS = 15
 
-    def _start_default_input_watcher(self):
-        # Started whenever the platform can report the default mic, even with
-        # none connected yet: a laptop opened undocked should still pick up the
-        # dock's microphone when it arrives.
-        if not audio_endpoints.is_supported():
-            return
-        threading.Thread(target=self._watch_default_input, daemon=True,
-                         name="default-input-watcher").start()
+    def _start_microphone_watcher(self):
+        self._dead_capture_polls = 0
+        threading.Thread(target=self._watch_microphone, daemon=True,
+                         name="microphone-watcher").start()
 
-    def _watch_default_input(self):
-        known_input_id = audio_endpoints.get_default_input_id()
+    def _watch_microphone(self):
+        seen = (audio_endpoints.get_default_input_id(), audio_endpoints.get_input_count())
         while True:
-            time.sleep(self.DEFAULT_INPUT_POLL_SECONDS)
+            time.sleep(self.MICROPHONE_POLL_SECONDS)
             try:
-                known_input_id = self._follow_default_input(known_input_id)
+                seen = self._keep_microphone_bound(seen)
             except Exception as e:
-                self.logger.error(f"Default input watcher failed: {e}")
+                self.logger.error(f"Microphone watcher failed: {e}")
 
-    # One watcher tick: rebind if the default mic changed or capture died.
-    # Returns the default input ID to compare against on the next tick.
-    def _follow_default_input(self, known_input_id):
-        # A mic picked explicitly in the tray stays put.
-        if self.config_manager.get_setting('audio', 'input_device') != 'default':
-            return known_input_id
-        current_input_id = audio_endpoints.get_default_input_id()
-        if current_input_id is None:
-            # No microphone at all right now (unplugged, or none yet). There is
-            # nothing to rebind to, so wait rather than log a failure every tick.
-            return known_input_id
-        default_changed = current_input_id != known_input_id
-        if not default_changed and self.audio_recorder.is_capturing():
-            return known_input_id
-        # Never swap the mic mid-recording or mid-transcription; retry next tick.
-        if self.get_current_state() != 'idle':
-            return known_input_id
-        self._rebind_to_default_input()
-        return current_input_id or known_input_id
+    # One watcher poll. `seen` is (default input id, capture device count) from
+    # the last poll that was acted on; the returned pair replaces it.
+    def _keep_microphone_bound(self, seen):
+        # Never swap the mic mid-recording or mid-transcription; the change
+        # stays pending because `seen` is returned untouched.
+        if self.get_current_state() in ('recording', 'processing'):
+            return seen
+        seen_default, seen_count = seen
+        default_id = audio_endpoints.get_default_input_id()
+        input_count = audio_endpoints.get_input_count()
+        if audio_endpoints.is_supported() and default_id is None:
+            # No microphone at all right now. There is nothing to bind to, so
+            # wait rather than rebuild the stream every few seconds.
+            return seen
 
-    def _rebind_to_default_input(self):
+        if self.audio_recorder.is_capturing():
+            self._dead_capture_polls = 0
+        else:
+            self._dead_capture_polls += 1
+
+        follows_default = self.configured_microphone() == 'default'
+        if input_count != seen_count:
+            reason = "a microphone was connected or removed"
+        elif follows_default and default_id != seen_default:
+            reason = "the default microphone changed"
+        elif self._dead_capture_polls >= self.DEAD_CAPTURE_POLLS:
+            reason = "the microphone stopped delivering audio"
+            self._dead_capture_polls = -self.DEAD_CAPTURE_RETRY_POLLS
+        else:
+            return seen
+        self._rebind_microphone(reason)
+        return (default_id, input_count)
+
+    def _rebind_microphone(self, reason: str):
         # PortAudio enumerates devices only at init: close our stream, re-init
-        # it, then pick the host's now-current default input. Under the recorder
-        # lock, so no recording can start against a stream that is being torn
-        # down, and no stream is open while PortAudio is re-initialised.
+        # it, then resolve the microphone against the fresh list. Under the
+        # recorder lock, so no recording can start against a stream that is
+        # being torn down, and no stream is open while PortAudio re-initialises.
         with self._recorder_lock:
+            previous_name = self._get_device_name(self.audio_recorder.device)
             self.audio_recorder.shutdown()
             sd._terminate()
             sd._initialize()
 
-            device_id = self._get_default_device_for_host(self._current_audio_host)
-            if device_id is None:
-                self.logger.warning("Default input changed, but no input device is available")
-                return
-
+            device_id = self.resolve_microphone()
             device_name = self._get_device_name(device_id)
-            self.logger.info(f"Default input changed, following it to: {device_name}")
+            self.logger.info(f"Rebinding the microphone ({reason}): {device_name}")
             self._execute_audio_device_change(device_id, device_name)
         # Tray calls stay outside the lock: the menu rebuild reads state.
-        self.system_tray.notify(f"Microphone: {device_name}")
+        if device_name != previous_name:
+            self.system_tray.notify(f"Microphone: {device_name}")
         self.system_tray.refresh_menu()
 
     def _initialize_audio_host(self):
@@ -2019,29 +2312,10 @@ class StateManager:
             return 'WASAPI'
         return None
 
+    # After the audio host changes, the same microphone has another index there.
     def _ensure_audio_device_for_host(self, host_name: Optional[str]):
-        if not host_name or not self.audio_recorder:
-            return
-
-        try:
-            current_device_id = self.audio_recorder.get_device_id()
-        except Exception as e:
-            self.logger.error(f"Unable to read current audio device: {e}")
-            return
-
-        if self._device_matches_host(current_device_id, host_name):
-            return
-
-        fallback_device_id = self._get_default_device_for_host(host_name)
-        if fallback_device_id is None:
-            self.logger.warning(f"No input devices available for host {host_name}")
-            return
-
-        device_name = self._get_device_name(fallback_device_id)
-        success = self.request_audio_device_change(fallback_device_id, device_name)
-
-        if not success:
-            self.logger.warning(f"Failed to switch to fallback device {fallback_device_id} for host {host_name}")
+        if host_name and self.audio_recorder:
+            self._bind_microphone()
 
     def _device_matches_host(self, device_id: int, host_name: str) -> bool:
         try:
@@ -2079,9 +2353,10 @@ class StateManager:
 
         return None
 
-    def _get_device_name(self, device_id: int) -> str:
+    # A readable name for a PortAudio index; None means the system default input.
+    def _get_device_name(self, device_id: Optional[int]) -> str:
         try:
-            device_info = sd.query_devices(device_id)
+            device_info = sd.query_devices(device_id) if device_id is not None else sd.query_devices(kind='input')
             return device_info.get('name', f"Device {device_id}")
         except Exception:
-            return f"Device {device_id}"
+            return "Default microphone" if device_id is None else f"Device {device_id}"

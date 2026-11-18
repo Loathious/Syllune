@@ -136,7 +136,8 @@ def setup_audio_recorder(audio_config, state_manager, vad_manager, streaming_man
         vad_manager=vad_manager,
         streaming_manager=streaming_manager,
         on_streaming_result=state_manager.handle_streaming_result,
-        device=audio_config['input_device'],
+        # Resolved by name against the current device list; see StateManager.
+        device=state_manager.resolve_microphone(),
         noise_suppression_config=audio_config.get('noise_suppression') or {},
         whisper_mode_config=audio_config.get('whisper_mode') or {},
     )
@@ -385,6 +386,9 @@ def main():
     parser.add_argument('--window', choices=('cheat-sheet', 'add-word', 'fallback', 'history'),
                         help=argparse.SUPPRESS)
     parser.add_argument('--enable-autostart', action='store_true', help='Launch Syllune automatically at login')
+    # Set by the login entry (autostart.py). The installed shell reads it to
+    # start without opening its window; the engine itself has nothing to do.
+    parser.add_argument('--background', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--disable-autostart', action='store_true', help='Stop launching at login')
     parser.add_argument('--selftest', action='store_true', help='Run automated self-test (mic, model, transcription, clipboard)')
     parser.add_argument('--cheat-sheet', action='store_true', help='Show your currently configured hotkeys in a window')
@@ -560,6 +564,7 @@ def main():
             from . import autostart
             if autostart.repair_if_broken():
                 print("   ✓ Repaired a broken 'start on login' entry from an earlier version")
+            autostart.adopt_background_start()
             # Installed copies start with Windows by default, once. The marker
             # keeps a later "off" in Settings from being switched back on.
             marker = os.path.join(get_user_app_data_path(), 'autostart_default_applied')

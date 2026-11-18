@@ -49,17 +49,26 @@ class CapturePipelineTests(unittest.TestCase):
         s._smart_edit = Mock()
         s._foreground_is_textable = lambda: False
 
-    def test_missing_input_saves_pending_without_copy_or_popup(self):
+    def test_missing_input_saves_pending_and_copies_without_typing(self):
         self.state.fallback_window = Mock()
         self.state._transcription_pipeline(np.zeros(19200, dtype=np.float32))
         entries = load_transcripts()
         self.assertEqual(1, len(entries))
         self.assertEqual('pending', entries[0]['delivery'])
-        self.state.clipboard_manager.copy_text.assert_not_called()
+        self.state.clipboard_manager.copy_text.assert_called_once_with('hello there')
+        self.state.level_overlay.flash_copied.assert_called_once()
         self.state.clipboard_manager.deliver_transcription.assert_not_called()
         self.state.fallback_window.show.assert_not_called()
         self.state._smart_edit.assert_not_called()
         self.assertTrue(self.state.whisper_engine.transcribe_audio.call_args.kwargs['quick'])
+
+    # "Type" delivery with clipboard copies switched off is a request to keep
+    # dictation off the clipboard, and a missing text field does not override it.
+    def test_clipboard_free_setups_are_not_copied_behind_their_back(self):
+        self.state.clipboard_manager.silent_copy_allowed = False
+        self.state._transcription_pipeline(np.zeros(19200, dtype=np.float32))
+        self.state.clipboard_manager.copy_text.assert_not_called()
+        self.assertEqual('pending', load_transcripts()[0]['delivery'])
 
     def test_failed_paste_leaves_saved_dictation_pending(self):
         self.state._foreground_is_textable = lambda: True

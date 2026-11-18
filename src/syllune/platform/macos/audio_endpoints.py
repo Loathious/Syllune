@@ -5,9 +5,18 @@
 from typing import Optional
 
 
+# Core Audio on macOS needs no per-thread setup before a stream is opened.
+def keep_com_available():
+    pass
+
+
 def is_supported() -> bool:
     return False
 
 
 def get_default_input_id() -> Optional[str]:
+    return None
+
+
+def get_input_count() -> Optional[int]:
     return None

@@ -2,7 +2,7 @@
 # These tests exercise text-only behavior, with no microphone or model needed.
 import unittest
 
-from syllune.dictionary import suggest_hotwords
+from syllune.dictionary import suggest_hotwords, words_to_learn
 from syllune.corrections import corrections_from_edit
 from syllune.smart_edit import SmartEditor
 
@@ -15,6 +15,17 @@ class FlowLearningTests(unittest.TestCase):
     def test_case_variants_combine_without_losing_canonical_spelling(self):
         suggestions = suggest_hotwords(['We use GitHub.', 'We use Github.', 'Open GitHub.'])
         self.assertIn(('GitHub', 3), suggestions)
+
+    def test_contractions_and_weekdays_are_not_names(self):
+        self.assertEqual([], suggest_hotwords(["And I'm sure I'll see you on Monday."] * 4))
+
+    def test_learning_respects_removed_words_and_its_limit(self):
+        texts = ['We use Redis and Kafka.', 'Then Redis and Kafka.', 'Also Redis and Kafka.']
+        self.assertEqual(['Kafka', 'Redis'], sorted(words_to_learn(texts, [], [], [])))
+        self.assertEqual(['Kafka'], words_to_learn(texts, [], [], ['Redis']))
+        self.assertEqual([], words_to_learn(texts, ['Go'], ['Go'], [], limit=1))
+        # Words you typed yourself never use up the room for learned ones.
+        self.assertEqual(1, len(words_to_learn(texts, ['Go'], [], [], limit=1)))
 
     def test_ordinary_swedish_words_are_not_suggestions(self):
         self.assertEqual([], suggest_hotwords(['Ja, Det kan vi göra.'] * 4))

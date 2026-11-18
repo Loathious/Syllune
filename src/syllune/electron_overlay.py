@@ -157,6 +157,11 @@ class ElectronOverlay:
         self._recording.clear()
         self._state('success')
 
+    # The dictation found no text field and went to the clipboard instead.
+    def flash_copied(self):
+        self._recording.clear()
+        self._state('success', message='Copied')
+
     def flash_failure(self, message: str = None):
         self._recording.clear()
         self._state('error', message=message or '')
@@ -178,8 +183,14 @@ class ElectronOverlay:
         self.idle_pill = bool(enabled)
         self._send({'type': 'config', 'idle_pill': self.idle_pill})
 
-    def set_pending(self, count: int):
-        self._send({'type': 'pending', 'count': int(count)})
+    # A question on the resting pill ("Paste dictation?", "Use as prompt").
+    # A click on it comes back as the `offer_accept` action; unanswered, it
+    # leaves by itself after `seconds`.
+    def show_offer(self, kind: str, label: str, seconds: float):
+        self._send({'type': 'offer', 'kind': kind, 'label': label, 'seconds': seconds})
+
+    def clear_offer(self):
+        self._send({'type': 'offer', 'kind': None})
 
     # While a game runs the pill window is fully hidden (not just transparent),
     # so it can't affect how the game is presented or how the mouse is read.

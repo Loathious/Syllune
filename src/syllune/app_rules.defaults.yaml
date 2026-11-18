@@ -67,12 +67,14 @@ rules:
     initial_prompt: "Programming context. Identifiers, snake_case, camelCase, file paths, regex."
     style: verbatim
 
-  # AI assistants: the AI edit structures what you say as a prompt. Matches
-  # the desktop apps, their browser tabs, and Claude Code / Codex running in
-  # a terminal (they name the terminal tab), so this sits before terminals.
+  # AI assistants: what you say is pasted as you said it. A structured prompt
+  # version is prepared in the background and offered on the pill ("Use as
+  # prompt"); choosing it replaces the text that was just pasted. Matches the
+  # desktop apps, their browser tabs, and Claude Code / Codex running in a
+  # terminal (they name the terminal tab), so this sits before terminals.
   - id: ai-prompts
     match: ["claude.exe", "chatgpt.exe", "ChatGPT", "Claude", "Gemini", "Perplexity", "Copilot", "Codex", "Grok", "Mistral", "DeepSeek"]
-    style: prompt
+    prompt_offer: true
 
   # Terminals: copy only — pasting into a terminal can run commands
   - id: terminals

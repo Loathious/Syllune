@@ -275,7 +275,11 @@ class TextTargetWatcher:
             return False
         clicked_at = time.monotonic() if clicked_at is None else clicked_at
         try:
-            target = _probe_text_target(point)
+            # Some apps report an editable element whose bounds do not contain
+            # the click (custom-drawn editors, web views). The click only
+            # raises a question on the pill now, so the focused text field is
+            # proof enough.
+            target = _probe_text_target(point) or _probe_text_target()
             if (target and not self._stopped.is_set()
                     and time.monotonic() - clicked_at <= 0.75):
                 self.on_target(target)
