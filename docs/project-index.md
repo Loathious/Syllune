@@ -39,7 +39,7 @@ Proprietary product by Loathious (LICENSE; third-party notices in THIRD_PARTY_NO
 | **Level Overlay** | `level_overlay.py` | Floating level meter + streaming text pill | tkinter |
 | **Fallback Window** | `fallback_window.py` | Capture window when no text field is focused | tkinter |
 | **Transforms** | `transforms.py` | AI text transforms via Ollama | ruamel.yaml |
-| **Dictionary** | `dictionary.py` | Hotword add/remove/list + add-word dialog | tkinter, ruamel.yaml |
+| **Dictionary** | `dictionary.py` | Hotwords: add/remove/list, and learning the names you say often from history | tkinter, ruamel.yaml |
 | **Profiles** | `profiles.py` | Dictation/Chat/Code/Notes/Translate presets | ruamel.yaml |
 | **Per-App Rules** | `app_rules.py` | Foreground-app-specific behaviour overrides | ruamel.yaml |
 | **Layered Defaults** | `defaults_merge.py` | Loads shipped defaults under the user's app_rules/commands/transforms/profiles, and migrates pre-0.21 full copies | ruamel.yaml |

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "syllune"
-version = "0.24.2"
+version = "0.25.0"
 description = "Syllune: local dictation, a floating voice pill, and private meeting notes."
 readme = "README.md"
 # Proprietary: free to use for now, all other rights reserved. Code that came

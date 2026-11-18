@@ -1,25 +1,38 @@
 <p align="center"><img src="docs/assets/banner.png" alt="Syllune" width="100%"></p>
 
 <p align="center">
+  <a href="https://github.com/Loathious/Syllune/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Loathious/Syllune?label=release&color=243B5A"></a>
   <img alt="Platform" src="https://img.shields.io/badge/platform-Windows%2010%2B-243B5A">
   <img alt="Runs locally" src="https://img.shields.io/badge/runs-100%25%20local-243B5A">
 </p>
 
-Hold a shortcut, speak, release. Syllune types what you said wherever your cursor is. Speech recognition runs on your own computer with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), so nothing is uploaded and you don't need an account.
+<h3 align="center">Talk instead of typing. Everything stays on your PC.</h3>
 
-## Features
+Hold a shortcut, speak, release. Syllune types what you said wherever your cursor is: a chat box, an editor, a search field. Speech recognition runs on your own computer with [faster-whisper](https://github.com/SYSTRAN/faster-whisper), so nothing is uploaded, there is no account, and once the speech model is downloaded it works offline.
 
-- **Dictation anywhere.** Hold Ctrl+Win, or double-tap it to dictate hands-free.
-- **Fast on short messages, careful on long ones.** Uses your NVIDIA GPU when it has one, and you can pick the speed/quality balance in Settings.
-- **Optional local AI cleanup.** If [Ollama](https://ollama.com) is installed, Syllune fixes punctuation and phrasing on your own machine.
-- **Meeting notes and history.** Saves transcripts you can search, edit and replay.
-- **English and Swedish.**
+<p align="center"><img src="docs/assets/pill.png" alt="The Syllune pill: a thin line at rest, three buttons on hover, a moving line while you talk, Copied when done, and a Paste dictation? question when there was nowhere to type" width="880"></p>
+
+## What it does
+
+- **Dictation anywhere.** Hold Ctrl+Win and talk. Double-tap to go hands-free. Pause to think mid-sentence; it keeps listening while the keys are held.
+- **Your words, not a rewrite.** Your phrasing is kept; the optional AI edit only fixes punctuation and obvious slips. In AI chat apps it offers a structured-prompt version after you dictate, which you can take or ignore.
+- **Never lost.** Every dictation is also on the clipboard. If there was nowhere to type, the pill asks "Paste dictation?" the next time you click into a text field.
+- **A pill that stays out of the way.** It rests as a thin line at the edge of the screen, opens when your cursor comes near, and docks at the bottom or either side.
+- **Learns your vocabulary.** Names and terms you say often join the dictionary by themselves. Add a word once and it is spelled your way from then on.
+- **Meetings, notes and history.** Record a meeting, save a voice note, and search, fix or replay anything you have dictated.
+- **Fast.** Uses your NVIDIA GPU if you have one and falls back to the CPU if you don't. English and Swedish.
 
 ## Install
 
-The Windows installer is published with each release. It installs per user and needs no admin rights or developer tools.
+Get the installer from the [Releases page](https://github.com/Loathious/Syllune/releases). It installs for your user only and needs no admin rights or developer tools. The installer is unsigned, so Windows SmartScreen asks before running it.
 
-[Install and update](docs/syllune-install.md) · [Troubleshooting](docs/syllune-troubleshooting.md) · [Privacy](docs/syllune-privacy.md)
+Optional: install [Ollama](https://ollama.com) and Syllune uses a local model to tidy longer dictations. Without it, dictation works the same.
+
+[Install and update](docs/syllune-install.md) · [Troubleshooting](docs/syllune-troubleshooting.md) · [Privacy](docs/syllune-privacy.md) · [Changelog](CHANGELOG.md)
+
+## Privacy
+
+Audio, transcripts, settings and statistics stay in `%APPDATA%\Syllune`. The only network requests are model downloads and the optional check for a new release.
 
 ## Development
 

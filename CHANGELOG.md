@@ -2,6 +2,26 @@
 
 All notable changes to Syllune. Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-11-18
+
+### Fixed
+- The microphone no longer changes by itself. The one you pick is remembered by name instead of by a list position that Windows reshuffles, and when it is unplugged Syllune uses the Windows default until it is back. A microphone saved by an older version counts as "Windows default": pick it once more in Settings.
+- The microphone opens on the first try. On some PCs the first open after every start failed, and Syllune answered by recording from a different microphone; the cause (Windows audio not being set up on the recording thread) is fixed.
+- A recording that fails to open the microphone retries the same device instead of jumping to another one, and an idle app follows a changed Windows default without a restart.
+- Holding the keys and pausing to think no longer ends the recording or shows "Not hearing anything". That notice now appears only when nothing has been heard since you pressed the keys.
+- The pill is always there while you record. It is raised above other windows for the whole recording, comes back by itself if its window is closed or its page crashes, and replays the recording state after a reload.
+- If the speech engine stops, Syllune restarts it quietly (up to three times in ten minutes) and shows "Restarting Syllune" instead of going silent.
+- A dictation that runs out of GPU memory is retried instead of being lost.
+- The pill can be dragged from anywhere on it, including while its buttons are showing.
+
+### Changed
+- **Your words are kept.** The AI edit fixes punctuation and obvious slips and no longer rephrases. AI chat apps are no longer rewritten automatically: after a dictation there, the pill offers **Use as prompt**, prepared in the background, which replaces the text just typed with a structured prompt.
+- **Always on the clipboard.** The latest dictation stays on the clipboard after it is typed. With nowhere to type, the pill shows "Copied".
+- **Paste dictation?** A dictation that had nowhere to go is no longer inserted by itself the next time you click a text field. The pill asks first; ignore it and the text stays in History and on the clipboard.
+- **A quieter pill.** No app icon and no blue: dark glass, a thin line at rest that tucks to the screen edge after a few seconds and opens when the cursor comes near. The waveform is one narrow moving line instead of bars. Animation runs at the display's refresh rate.
+- **One Dictionary list.** Words and corrections share one list and one add row. Names and terms you say often are added by themselves (switch it off on the Dictionary page); a word you remove stays away.
+- Starting with Windows now starts in the background: only the pill, no window.
+
 ## [0.24.2] - 2026-10-28
 
 ### Fixed

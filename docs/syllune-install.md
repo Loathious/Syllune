@@ -14,11 +14,11 @@ Choose Download in the guide to install the selected model. If the connection fa
 
 Hold the recording shortcut shown in the guide, speak, then release. The default shortcut is Ctrl+Win on Windows. Double-tap to use hands-free recording; stop or cancel from the pill. The guide displays the actual configured shortcut if it has been changed.
 
-Drag the pill to reveal three docks. The highlighted preview shows where it will land on release. Side docks show a vertical waveform and icons. Hover an icon to read its action. Click the hub icon to open history, notes, meetings, styles, and settings.
+The pill rests as a thin line at the edge of the screen and opens when the cursor comes near. Drag it from anywhere to reveal three docks; the highlighted preview shows where it will land on release. Hover an icon to read its action. Click the hub icon to open history, notes, meetings, styles, and settings.
 
-If there is no writable text field, your dictation waits in History. Click a writable field to insert a queued dictation. Password fields are excluded. Use Copy if an application's accessibility support prevents automatic insertion.
+Every dictation is also copied to the clipboard. If there is no writable text field, it waits in History and the pill asks "Paste dictation?" the next time you click a writable field; nothing is inserted unless you accept. Password fields are excluded. Paste with Ctrl+V if an application's accessibility support prevents automatic insertion.
 
-Choose a writing style during setup or in Styles. Per-app rules can override the default. Formal uses full sentences; Casual is lighter; Verbatim avoids style cleanup. Prompt formatting uses the optional local AI editor. The app never asks that editor to answer your dictation.
+Choose a writing style during setup or in Styles. Per-app rules can override the default. Formal uses full sentences; Casual is lighter; Verbatim avoids style cleanup. In AI chat apps the pill offers a structured-prompt version after you dictate; it uses the optional local AI editor. The app never asks that editor to answer your dictation.
 
 ## Updates
 
